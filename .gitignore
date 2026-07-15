@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv_meta/
+
+# Mac / IDE
+.DS_Store
+.idea/
+.vscode/
+
+# Temporary files
+temp_upload.png
+test_user_3d_upload.npz
+
+# Large datasets - do not upload to GitHub
+Data/
+archive/
+*.h5
+*.npz
+
+# Training outputs
+runs/
+runs_3d/
+backups/

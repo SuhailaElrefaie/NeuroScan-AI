@@ -1,0 +1,10 @@
+{
+    "Validation loss": 0.3451368143123221,
+    "Dice coefficient": 0.8473125590805557,
+    "Mean IoU": 0.7378119850487583,
+    "Precision": 0.837839348897295,
+    "Recall / Sensitivity": 0.8607240021613796,
+    "Epoch": 77,
+    "Threshold": 0.3,
+    "Run folder": "runs/run_2026_05_13_150456"
+}
