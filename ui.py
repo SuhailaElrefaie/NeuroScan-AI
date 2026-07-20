@@ -148,7 +148,7 @@ def render_export_2d_sidebar():
     """Export buttons for the latest 2D prediction. Rendered after prediction so it updates immediately."""
     with st.sidebar.expander("Export 2D Results", expanded=False):
         if "export_2d" not in st.session_state:
-            st.caption("Run a 2D prediction first to export results.")
+            st.caption("Upload a 2D image first to export results.")
             return
 
         export_2d = st.session_state["export_2d"]
@@ -185,7 +185,7 @@ def render_export_3d_sidebar():
     """Export buttons for the latest selected 3D slice. Rendered after prediction so it updates immediately."""
     with st.sidebar.expander("Export 3D Slice Results", expanded=False):
         if "export_3d" not in st.session_state:
-            st.caption("Run a 3D prediction first to export results.")
+            st.caption("Upload a 3D volume first to export results.")
             return
 
         export_3d = st.session_state["export_3d"]
@@ -756,7 +756,8 @@ if page != st.session_state["current_page"]:
         "result_3d",
         "input_mode_3d_previous",
         "export_2d",
-        "export_3d"
+        "export_3d",
+        "last_3d_upload_signature"
     ]
 
     for key in keys_to_clear:
@@ -1050,25 +1051,40 @@ elif page == "3D MRI Analysis":
 
 
     uploaded_3d_file = st.file_uploader(
-        "Upload 3D MRI volume as .npz",
+        "Upload 3D MRI volume (.NPZ)",
         type=["npz"],
         help="Expected array shape: [4, D, H, W], [D, H, W, 4], or [D, H, W]. If the file contains one array named 'image', it will be used.",
         key=f"upload_3d_{st.session_state['upload_reset_counter']}"
     )
 
-    run_upload_button = st.button("Run 3D Prediction on Uploaded Volume")
+    if uploaded_3d_file:
+        upload_signature = (
+            f"{uploaded_3d_file.name}_{uploaded_3d_file.size}_"
+            f"{threshold_3d}_{overlay_alpha_3d}_{modality_index}"
+        )
 
-    if run_upload_button:
-        if uploaded_3d_file is None:
-            st.warning("Please upload a .npz file first. You can download a sample above if you do not have your own file.")
-        else:
-            with st.spinner("Running 3D model on uploaded MRI volume..."):
+        if st.session_state.get("last_3d_upload_signature") != upload_signature:
+            with st.spinner("Analyzing 3D MRI volume..."):
                 result = predict_uploaded_3d_npz(
                     uploaded_file=uploaded_3d_file,
                     threshold=threshold_3d
                 )
 
             st.session_state["result_3d"] = result
+            st.session_state["last_3d_upload_signature"] = upload_signature
+
+    else:
+        if "result_3d" in st.session_state:
+            del st.session_state["result_3d"]
+        if "export_3d" in st.session_state:
+            del st.session_state["export_3d"]
+        if "last_3d_upload_signature" in st.session_state:
+            del st.session_state["last_3d_upload_signature"]
+
+        st.info(
+            "Upload a .NPZ 3D MRI volume to generate a predicted tumor mask, "
+            "slice overlays, probability map, and interactive 3D pixel view."
+        )
 
     if "result_3d" in st.session_state:
         result = st.session_state["result_3d"]
