@@ -144,6 +144,99 @@ def render_sample_folder_sidebar(folder, extensions, title, help_text, mime_type
             )
 
 
+def render_export_2d_sidebar():
+    """Export buttons for the latest 2D prediction. Rendered after prediction so it updates immediately."""
+    with st.sidebar.expander("Export 2D Results", expanded=False):
+        if "export_2d" not in st.session_state:
+            st.caption("Run a 2D prediction first to export results.")
+            return
+
+        export_2d = st.session_state["export_2d"]
+
+        st.download_button(
+            label="Segmentation Overlay",
+            data=export_2d["overlay"],
+            file_name="2d_segmentation_overlay.png",
+            mime="image/png",
+            use_container_width=True,
+            key="export_2d_overlay"
+        )
+
+        st.download_button(
+            label="Tumor Mask",
+            data=export_2d["mask_only"],
+            file_name="2d_tumor_mask.png",
+            mime="image/png",
+            use_container_width=True,
+            key="export_2d_mask"
+        )
+
+        st.download_button(
+            label="Grad-CAM Overlay",
+            data=export_2d["gradcam_overlay"],
+            file_name="2d_gradcam_overlay.png",
+            mime="image/png",
+            use_container_width=True,
+            key="export_2d_gradcam"
+        )
+
+
+def render_export_3d_sidebar():
+    """Export buttons for the latest selected 3D slice. Rendered after prediction so it updates immediately."""
+    with st.sidebar.expander("Export 3D Slice Results", expanded=False):
+        if "export_3d" not in st.session_state:
+            st.caption("Run a 3D prediction first to export results.")
+            return
+
+        export_3d = st.session_state["export_3d"]
+
+        st.download_button(
+            label="MRI Slice",
+            data=export_3d["input_img"],
+            file_name=export_3d["input_name"],
+            mime="image/png",
+            use_container_width=True,
+            key="export_3d_input"
+        )
+
+        st.download_button(
+            label="Prediction Mask",
+            data=export_3d["pred_mask_img"],
+            file_name=export_3d["pred_name"],
+            mime="image/png",
+            use_container_width=True,
+            key="export_3d_prediction"
+        )
+
+        st.download_button(
+            label="Overlay",
+            data=export_3d["overlay_img"],
+            file_name=export_3d["overlay_name"],
+            mime="image/png",
+            use_container_width=True,
+            key="export_3d_overlay"
+        )
+
+        if export_3d["true_mask_img"] is not None:
+            st.download_button(
+                label="Ground Truth Mask",
+                data=export_3d["true_mask_img"],
+                file_name=export_3d["true_name"],
+                mime="image/png",
+                use_container_width=True,
+                key="export_3d_true"
+            )
+
+        st.download_button(
+            label="Probability Map",
+            data=export_3d["prob_img"],
+            file_name=export_3d["prob_name"],
+            mime="image/png",
+            use_container_width=True,
+            key="export_3d_probability"
+        )
+
+
 def image_to_png_bytes(image):
     buffer = io.BytesIO()
     image.save(buffer, format="PNG")
@@ -504,6 +597,19 @@ st.markdown(
         color: #8b949e;
         line-height: 1.3;
     }
+
+    .home-brain-wrap {
+        display: flex;
+        justify-content: center;
+        margin-top: 10px;
+        margin-bottom: 8px;
+    }
+
+    .home-brain-icon {
+        width: 118px;
+        max-width: 28vw;
+        filter: drop-shadow(0 0 12px rgba(0, 123, 255, 0.25));
+    }
     </style>
     """,
     unsafe_allow_html=True
@@ -511,11 +617,51 @@ st.markdown(
 
 
 # =========================
+# Initial page state
+# =========================
+
+if "active_page" not in st.session_state:
+    st.session_state["active_page"] = "Home"
+
+if "current_page" not in st.session_state:
+    st.session_state["current_page"] = st.session_state["active_page"]
+
+if "upload_reset_counter" not in st.session_state:
+    st.session_state["upload_reset_counter"] = 0
+
+page = st.session_state["active_page"]
+
+
+# =========================
 # Header
 # =========================
 
-st.markdown(
+brain_icon = ""
+
+if page == "Home":
+    brain_icon = """
+    <div class='home-brain-wrap'>
+        <svg class='home-brain-icon' viewBox='0 0 220 170' fill='none' xmlns='http://www.w3.org/2000/svg'>
+            <path d='M78 130C48 130 28 109 28 80C28 54 46 35 70 35C76 19 91 10 109 14C120 5 139 7 150 20C173 20 192 40 192 66C205 76 207 101 191 116C182 132 164 138 146 133C136 145 116 149 102 137C94 142 84 139 78 130Z' stroke='#007bff' stroke-width='6' stroke-linecap='round' stroke-linejoin='round'/>
+            <path d='M72 35C65 50 68 63 82 70' stroke='#007bff' stroke-width='4' stroke-linecap='round'/>
+            <path d='M110 14C100 29 101 45 116 55' stroke='#007bff' stroke-width='4' stroke-linecap='round'/>
+            <path d='M150 20C143 34 146 48 160 58' stroke='#007bff' stroke-width='4' stroke-linecap='round'/>
+            <path d='M82 70C67 76 62 93 72 107' stroke='#007bff' stroke-width='4' stroke-linecap='round'/>
+            <path d='M116 55C104 68 108 85 123 92' stroke='#007bff' stroke-width='4' stroke-linecap='round'/>
+            <path d='M160 58C147 68 148 88 163 97' stroke='#007bff' stroke-width='4' stroke-linecap='round'/>
+            <path d='M72 107C86 103 96 108 102 137' stroke='#007bff' stroke-width='4' stroke-linecap='round'/>
+            <path d='M123 92C112 105 119 123 136 130' stroke='#007bff' stroke-width='4' stroke-linecap='round'/>
+            <path d='M163 97C152 105 148 118 146 133' stroke='#007bff' stroke-width='4' stroke-linecap='round'/>
+            <path d='M92 86C102 78 115 78 126 86' stroke='#007bff' stroke-width='3.5' stroke-linecap='round'/>
+            <path d='M132 72C141 67 153 69 161 78' stroke='#007bff' stroke-width='3.5' stroke-linecap='round'/>
+            <path d='M59 84C70 83 78 88 83 98' stroke='#007bff' stroke-width='3.5' stroke-linecap='round'/>
+        </svg>
+    </div>
     """
+
+st.markdown(
+    f"""
+    {brain_icon}
     <h1 style='text-align: center;'>AI-Assisted Brain Tumor MRI Segmentation</h1>
     <p style='text-align: center; font-size: 1.15rem; color: #666666;'>
         2D and 3D U-Net segmentation with visual explanation
@@ -670,32 +816,6 @@ if page == "2D MRI Analysis":
             help="Controls how strongly the Grad-CAM heatmap appears."
         )
 
-    with st.sidebar.expander("Export 2D Results", expanded=False):
-        if "export_2d" in st.session_state:
-            export_2d = st.session_state["export_2d"]
-
-            st.download_button(
-                label="Segmentation Overlay",
-                data=export_2d["overlay"],
-                file_name="2d_segmentation_overlay.png",
-                mime="image/png"
-            )
-
-            st.download_button(
-                label="Tumor Mask",
-                data=export_2d["mask_only"],
-                file_name="2d_tumor_mask.png",
-                mime="image/png"
-            )
-
-            st.download_button(
-                label="Grad-CAM Overlay",
-                data=export_2d["gradcam_overlay"],
-                file_name="2d_gradcam_overlay.png",
-                mime="image/png"
-            )
-        else:
-            st.caption("Run a 2D prediction first to export results.")
 
 elif page == "3D MRI Analysis":
     render_sample_folder_sidebar(
@@ -729,47 +849,6 @@ elif page == "3D MRI Analysis":
             format_func=lambda x: f"Channel {x}"
         )
 
-    with st.sidebar.expander("Export 3D Slice Results", expanded=False):
-        if "export_3d" in st.session_state:
-            export_3d = st.session_state["export_3d"]
-
-            st.download_button(
-                label="MRI Slice",
-                data=export_3d["input_img"],
-                file_name=export_3d["input_name"],
-                mime="image/png"
-            )
-
-            st.download_button(
-                label="Prediction Mask",
-                data=export_3d["pred_mask_img"],
-                file_name=export_3d["pred_name"],
-                mime="image/png"
-            )
-
-            st.download_button(
-                label="Overlay",
-                data=export_3d["overlay_img"],
-                file_name=export_3d["overlay_name"],
-                mime="image/png"
-            )
-
-            if export_3d["true_mask_img"] is not None:
-                st.download_button(
-                    label="Ground Truth Mask",
-                    data=export_3d["true_mask_img"],
-                    file_name=export_3d["true_name"],
-                    mime="image/png"
-                )
-
-            st.download_button(
-                label="Probability Map",
-                data=export_3d["prob_img"],
-                file_name=export_3d["prob_name"],
-                mime="image/png"
-            )
-        else:
-            st.caption("Run a 3D prediction first to export results.")
 
 # =========================
 # Model metric summary values
@@ -952,28 +1031,6 @@ elif page == "2D MRI Analysis":
             st.metric("Predicted Mask Area", f"{tumor_pixels} px")
             st.caption("Number of pixels included in the predicted mask")
 
-        st.sidebar.markdown("---")
-        with st.sidebar.expander("Export 2D Results", expanded=False):
-            st.download_button(
-                label="Segmentation Overlay",
-                data=image_to_png_bytes(overlay),
-                file_name="2d_segmentation_overlay.png",
-                mime="image/png"
-            )
-
-            st.download_button(
-                label="Tumor Mask",
-                data=image_to_png_bytes(mask_only),
-                file_name="2d_tumor_mask.png",
-                mime="image/png"
-            )
-
-            st.download_button(
-                label="Grad-CAM Overlay",
-                data=image_to_png_bytes(gradcam_overlay),
-                file_name="2d_gradcam_overlay.png",
-                mime="image/png"
-            )
 
     else:
         st.info(
@@ -1390,6 +1447,15 @@ elif page == "3D Training Progress":
             "No best 3D history file found yet. This is okay if your quick run "
             "did not update best_model_3d."
         )
+
+# Sidebar export buttons are rendered after page content so they update immediately
+# after a new upload/prediction and never duplicate.
+if page == "2D MRI Analysis":
+    st.sidebar.markdown("---")
+    render_export_2d_sidebar()
+elif page == "3D MRI Analysis":
+    st.sidebar.markdown("---")
+    render_export_3d_sidebar()
 
 # Bottom navigation
 if page != "Home":
