@@ -39,6 +39,9 @@ LATEST_3D_RUN_METRICS_PATH = "runs_3d/run_3d_2026_05_14_191516/metrics_3d.json"
 DEPTH_3D = 16
 IMAGE_SIZE_3D = (96, 96)
 
+SAMPLE_2D_DIR = "sample_data/2d"
+SAMPLE_3D_DIR = "sample_data/3d"
+
 
 # =========================
 # Helper functions
@@ -66,6 +69,79 @@ def find_latest_file(pattern):
         return None
 
     return max(files, key=os.path.getmtime)
+
+
+def get_sample_files(folder, extensions):
+    if not os.path.exists(folder):
+        return []
+
+    sample_files = []
+
+    for extension in extensions:
+        sample_files.extend(glob.glob(os.path.join(folder, f"*.{extension}")))
+
+    return sorted(sample_files)
+
+
+def read_file_bytes(path):
+    with open(path, "rb") as file:
+        return file.read()
+
+
+def render_sample_downloads(folder, extensions, title, help_text, mime_type):
+    sample_files = get_sample_files(folder, extensions)
+
+    with st.expander(title, expanded=False):
+        st.caption(help_text)
+
+        if len(sample_files) == 0:
+            st.warning(
+                f"No sample files found in `{folder}`. Run `python make_public_samples.py` locally, "
+                "then commit and push the generated `sample_data` folder."
+            )
+            return
+
+        columns = st.columns(min(5, len(sample_files)))
+
+        for index, path in enumerate(sample_files[:5]):
+            file_name = os.path.basename(path)
+            extension = os.path.splitext(path)[1].lower()
+
+            with columns[index % len(columns)]:
+                st.download_button(
+                    label=f"⬇️ Download {index + 1}",
+                    data=read_file_bytes(path),
+                    file_name=file_name,
+                    mime=mime_type,
+                    use_container_width=True
+                )
+
+
+def render_sample_folder_sidebar(folder, extensions, title, help_text, mime_type):
+    """Small sample-download folder shown in the analysis sidebar."""
+    sample_files = get_sample_files(folder, extensions)
+
+    with st.sidebar.expander(title, expanded=False):
+        st.caption(help_text)
+
+        if len(sample_files) == 0:
+            st.warning(
+                f"No sample files found in `{folder}`. Run `python make_public_samples.py`, "
+                "then commit and push the generated `sample_data` folder."
+            )
+            return
+
+        for index, path in enumerate(sample_files[:5]):
+            file_name = os.path.basename(path)
+
+            st.download_button(
+                label=f"⬇️ Download {index + 1}",
+                data=read_file_bytes(path),
+                file_name=file_name,
+                mime=mime_type,
+                use_container_width=True,
+                key=f"download_{title}_{index}_{file_name}"
+            )
 
 
 def image_to_png_bytes(image):
@@ -549,6 +625,14 @@ if page != st.session_state["current_page"]:
 # =========================
 
 if page == "2D MRI Analysis":
+    render_sample_folder_sidebar(
+        folder=SAMPLE_2D_DIR,
+        extensions=["png", "jpg", "jpeg"],
+        title="📁 Test 2D samples",
+        help_text="Download a sample MRI image, then upload it in the 2D analysis page.",
+        mime_type="image/png"
+    )
+
     with st.sidebar.expander("2D Controls", expanded=False):
         threshold = st.slider(
             "Segmentation Threshold",
@@ -614,6 +698,14 @@ if page == "2D MRI Analysis":
             st.caption("Run a 2D prediction first to export results.")
 
 elif page == "3D MRI Analysis":
+    render_sample_folder_sidebar(
+        folder=SAMPLE_3D_DIR,
+        extensions=["npz"],
+        title="📁 Test 3D samples",
+        help_text="Download a sample .npz volume, then upload it in the 3D analysis page.",
+        mime_type="application/octet-stream"
+    )
+
     with st.sidebar.expander("3D Controls", expanded=False):
         threshold_3d = st.slider(
             "3D Segmentation Threshold",
@@ -758,7 +850,7 @@ elif page == "3D Info":
     st.markdown("""
     This section is for volume-based MRI tumor segmentation.
 
-    - **Analysis:** run prediction on a BraTS demo volume or uploaded `.npz` volume
+    - **Analysis:** download a sample `.npz` file or upload your own 3D MRI volume
     - **Training:** view the saved 3D model performance and training curves
     """)
 
@@ -771,6 +863,7 @@ elif page == "2D MRI Analysis":
     render_workflow_buttons("2D")
     st.markdown("---")
     st.subheader("2D MRI Slice Analysis")
+
 
     uploaded_file = st.file_uploader(
         "Upload MRI Scan Image (PNG/JPG)",
@@ -898,65 +991,27 @@ elif page == "3D MRI Analysis":
     st.markdown("---")
     st.subheader("3D MRI Volume Analysis")
 
-    input_mode = st.radio(
-        "3D Input Mode",
-        ["Demo dataset volume", "User upload (.npz)"],
-        horizontal=True,
-        key="input_mode_3d"
+
+    uploaded_3d_file = st.file_uploader(
+        "Upload 3D MRI volume as .npz",
+        type=["npz"],
+        help="Expected array shape: [4, D, H, W], [D, H, W, 4], or [D, H, W]. If the file contains one array named 'image', it will be used.",
+        key=f"upload_3d_{st.session_state['upload_reset_counter']}"
     )
 
-    # Reset 3D result when switching between demo mode and upload mode
-    if "input_mode_3d_previous" not in st.session_state:
-        st.session_state["input_mode_3d_previous"] = input_mode
+    run_upload_button = st.button("Run 3D Prediction on Uploaded Volume")
 
-    if input_mode != st.session_state["input_mode_3d_previous"]:
-        if "result_3d" in st.session_state:
-            del st.session_state["result_3d"]
-
-        st.session_state["upload_reset_counter"] += 1
-        st.session_state["input_mode_3d_previous"] = input_mode
-
-    if input_mode == "Demo dataset volume":
-        volume_index = st.number_input(
-            "Volume index from dataset",
-            min_value=0,
-            value=0,
-            step=1,
-            help="This selects one 3D MRI volume from the BraTS H5 dataset folder."
-        )
-
-        run_button = st.button("Run 3D Prediction")
-
-        if run_button:
-            with st.spinner("Running 3D model on MRI volume..."):
-                result = predict_3d_volume(
-                    volume_index=int(volume_index),
+    if run_upload_button:
+        if uploaded_3d_file is None:
+            st.warning("Please upload a .npz file first. You can download a sample above if you do not have your own file.")
+        else:
+            with st.spinner("Running 3D model on uploaded MRI volume..."):
+                result = predict_uploaded_3d_npz(
+                    uploaded_file=uploaded_3d_file,
                     threshold=threshold_3d
                 )
 
             st.session_state["result_3d"] = result
-
-    else:
-        uploaded_3d_file = st.file_uploader(
-            "Upload 3D MRI volume as .npz",
-            type=["npz"],
-            help="Expected array shape: [4, D, H, W] or [D, H, W, 4]. If the file contains one array named 'image', it will be used.",
-            key=f"upload_3d_{st.session_state['upload_reset_counter']}"
-        )
-
-        run_upload_button = st.button("Run 3D Prediction on Uploaded Volume")
-
-        if run_upload_button:
-            if uploaded_3d_file is None:
-                st.warning("Please upload a .npz file first.")
-            else:
-                with st.spinner("Running 3D model on uploaded MRI volume..."):
-                    result = predict_uploaded_3d_npz(
-                        uploaded_file=uploaded_3d_file,
-                        threshold=threshold_3d
-                    )
-
-                st.session_state["result_3d"] = result
 
     if "result_3d" in st.session_state:
         result = st.session_state["result_3d"]

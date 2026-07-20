@@ -23,3 +23,10 @@ archive/
 runs/
 runs_3d/
 backups/
+
+# Keep small public website samples
+!sample_data/
+!sample_data/2d/
+!sample_data/2d/*
+!sample_data/3d/
+!sample_data/3d/*.npz
