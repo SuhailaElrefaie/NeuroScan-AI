@@ -28,7 +28,20 @@ models/            # U-Net model files
 sample_data/       # Small sample files for testing the website
 ```
 
-## Datasets
+## Datasets Used
+
+This project uses two public MRI datasets:
+
+- **BRISC 2025** for 2D brain MRI image segmentation  
+  https://www.kaggle.com/datasets/briscdataset/brisc2025/
+
+- **BraTS2020 Training Data** for 3D brain MRI volume segmentation  
+  https://www.kaggle.com/datasets/awsaf49/brats2020-training-data
+
+The datasets are not included in this repository because they are large. The app includes a few small sample files so the website can still be tested without downloading the full datasets.
+
+
+## Datasets Setup
 
 The full datasets are not included in GitHub because they are too large.
 
@@ -48,6 +61,14 @@ archive/BraTS2020_training_data/content/data
 ```
 
 The website includes a few small sample files so the app can be tested without downloading the full datasets.
+
+## Live Demo
+
+The app is deployed here:
+
+https://neuroscan-ai-isp.streamlit.app
+
+You can test the system directly in the browser by uploading a 2D MRI image or a 3D `.npz` volume. Sample files are available inside the app sidebar.
 
 ## Run locally
 
