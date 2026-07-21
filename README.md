@@ -38,12 +38,10 @@ This project uses two public MRI datasets:
 - **BraTS2020 Training Data** for 3D brain MRI volume segmentation  
   https://www.kaggle.com/datasets/awsaf49/brats2020-training-data
 
-The datasets are not included in this repository because they are large. The app includes a few small sample files so the website can still be tested without downloading the full datasets.
+The datasets are not included in this repository because they are large.
 
 
 ## Datasets Setup
-
-The full datasets are not included in GitHub because they are too large.
 
 Expected local 2D dataset path:
 
@@ -59,8 +57,6 @@ Expected local 3D dataset path:
 ```text
 archive/BraTS2020_training_data/content/data
 ```
-
-The website includes a few small sample files so the app can be tested without downloading the full datasets.
 
 ## Live Demo
 
