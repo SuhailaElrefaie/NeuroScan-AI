@@ -12,6 +12,8 @@ venv_meta/
 # Temporary files
 temp_upload.png
 test_user_3d_upload.npz
+train3d_local_log.txt
+*.log
 
 # Large datasets - do not upload to GitHub
 Data/
@@ -23,6 +25,13 @@ archive/
 runs/
 runs_3d/
 backups/
+
+# Extra helper/local files
+audit_project.py
+count_data.py
+newest_ui.py
+training_history.csv
+best_unet.pth
 
 # Keep small public website samples
 !sample_data/
