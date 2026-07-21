@@ -100,7 +100,3 @@ The app expects saved model files here:
 best_model/best_unet.pth
 best_model_3d/best_unet3d.pth
 ```
-
-## Notes
-
-This is a prototype for an academic project. It is not a medical diagnosis tool.
