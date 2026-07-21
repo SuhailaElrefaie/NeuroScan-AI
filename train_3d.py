@@ -22,7 +22,7 @@ BEST_METRICS_PATH = os.path.join(BEST_DIR, "best_metrics_3d.json")
 BEST_HISTORY_PATH = os.path.join(BEST_DIR, "best_history_3d.csv")
 
 BATCH_SIZE = 1
-EPOCHS = 10
+EPOCHS = 30
 LEARNING_RATE = 1e-4
 VAL_SPLIT = 0.2
 SEED = 42
