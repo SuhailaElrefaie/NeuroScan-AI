@@ -58,6 +58,21 @@ Expected local 3D dataset path:
 archive/BraTS2020_training_data/content/data
 ```
 
+## Technologies Used
+
+- **Python** - main programming language
+- **PyTorch** - building and training the 2D and 3D U-Net models
+- **Streamlit** - web app interface
+- **OpenCV** - image processing and mask cleanup
+- **Pillow** - loading and handling MRI images
+- **NumPy** - numerical array processing
+- **Pandas** - reading and displaying training metrics
+- **Plotly** - interactive 3D visualization
+- **h5py** - reading the BraTS2020 H5 MRI files
+- **GitHub** - version control and project hosting
+- **Streamlit Community Cloud** - public deployment
+
+
 ## Live Demo
 
 The app is deployed here:
