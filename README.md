@@ -1,6 +1,6 @@
 # NeuroScan AI
 
-A small student project for AI-assisted brain tumor MRI segmentation.
+An AI-assisted brain tumor MRI segmentation project built as an Individual Software Project at Charles University under the supervision of Kassem Anis.
 
 The app uses a 2D U-Net for MRI slice segmentation and a 3D U-Net for MRI volume segmentation. It is built with Python, PyTorch, and Streamlit.
 
