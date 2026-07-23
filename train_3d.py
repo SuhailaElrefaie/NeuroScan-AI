@@ -22,15 +22,14 @@ BEST_METRICS_PATH = os.path.join(BEST_DIR, "best_metrics_3d.json")
 BEST_HISTORY_PATH = os.path.join(BEST_DIR, "best_history_3d.csv")
 
 BATCH_SIZE = 1
-EPOCHS = 30
+EPOCHS = 50
 LEARNING_RATE = 1e-4
 VAL_SPLIT = 0.2
 SEED = 42
 THRESHOLD = 0.5
 
-DEPTH = 16
-IMAGE_SIZE = (96,96)
-
+DEPTH = 32
+IMAGE_SIZE = (128, 128)
 
 def get_device():
     if torch.cuda.is_available():
