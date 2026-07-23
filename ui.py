@@ -1320,49 +1320,27 @@ elif page == "3D MRI Analysis":
 
         st.info(
             "Upload a .NPZ 3D MRI volume to generate a predicted tumor mask, "
-            "medical-style views, slice overlays, probability map, and optional interactive 3D pixel view."
+            "slice overlays, probability map, and optional interactive 3D pixel view."
         )
 
     if "result_3d" in st.session_state:
         result = st.session_state["result_3d"]
 
-        views, suggested_slice = get_orthogonal_3d_views(
-            result,
-            modality_index=modality_index,
-            overlay_alpha=overlay_alpha_3d
+        suggested_slice, _, _ = get_representative_3d_indices(result["pred_mask"])
+
+        st.markdown("### 3D Slice Explorer")
+        st.caption(
+            "Use the slider to move through the uploaded MRI volume. "
+            "The default slice is selected from the largest predicted tumor area."
         )
-
-        st.markdown("### Representative Tumor Views")
-        st.markdown(
-            """
-            <div class='view-note'>
-                These views automatically focus on the slice/planes where the predicted tumor is most visible.
-                The images are contrast-enhanced for display only; the model output is unchanged.
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-
-        v1, v2, v3 = st.columns(3)
-        for column, view_name in zip([v1, v2, v3], ["Axial", "Coronal", "Sagittal"]):
-            with column:
-                st.markdown(f"#### {view_name} Overlay")
-                st.image(
-                    views[view_name]["overlay"],
-                    use_container_width=True,
-                    caption=f"{view_name} index: {views[view_name]['index']}"
-                )
-
-        st.markdown("---")
-        st.markdown("### Slice Explorer")
 
         slice_index = st.slider(
-            "Axial Slice",
+            "Slice",
             min_value=0,
             max_value=result["depth"] - 1,
             value=suggested_slice,
             step=1,
-            help="The default slice is selected from the largest predicted tumor area."
+            help="Move through the 3D MRI volume slice by slice."
         )
 
         (
@@ -1714,4 +1692,3 @@ elif page == "3D MRI Analysis":
 # Bottom navigation
 if page != "Home":
     render_home_button_bottom()
-# ui refresh Fri Jul 24 01:26:46 EEST 2026
