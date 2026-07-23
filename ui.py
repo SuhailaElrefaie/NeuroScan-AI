@@ -1714,3 +1714,4 @@ elif page == "3D MRI Analysis":
 # Bottom navigation
 if page != "Home":
     render_home_button_bottom()
+# ui refresh Fri Jul 24 01:26:46 EEST 2026
