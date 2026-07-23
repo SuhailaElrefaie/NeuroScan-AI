@@ -1,15 +1,15 @@
 {
-    "Validation loss": 0.33635054436856754,
-    "Dice coefficient": 0.8632889822737811,
-    "Mean IoU": 0.7893471080464628,
-    "Precision": 0.8565620498985815,
-    "Recall / Sensitivity": 0.9095770881709467,
-    "Epoch": 27,
+    "Validation loss": 0.2988890786081144,
+    "Dice coefficient": 0.8704619636274364,
+    "Mean IoU": 0.8009925360480245,
+    "Precision": 0.8739816056492287,
+    "Recall / Sensitivity": 0.905581989960511,
+    "Epoch": 29,
     "Threshold": 0.5,
-    "Depth": 16,
+    "Depth": 32,
     "Image size": [
-        96,
-        96
+        128,
+        128
     ],
-    "Run folder": "runs_3d/run_3d_2026_07_21_121521"
+    "Run folder": "runs_3d/run_3d_2026_07_23_134509"
 }
