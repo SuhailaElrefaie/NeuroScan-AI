@@ -70,6 +70,30 @@ def postprocess_mask(mask: np.ndarray, min_area: int = 80) -> np.ndarray: # Clea
 
     return (cleaned > 0).astype(np.uint8)
 
+def get_best_threshold(default=0.3):
+    """
+    Returns the best saved 2D threshold if available.
+    Falls back to 0.3 if metrics file is missing.
+    """
+    import os
+    import json
+
+    metrics_path = "best_model/best_metrics.json"
+
+    if not os.path.exists(metrics_path):
+        return default
+
+    try:
+        with open(metrics_path, "r") as f:
+            metrics = json.load(f)
+
+        return float(
+            metrics.get("Threshold",
+            metrics.get("threshold",
+            metrics.get("best_threshold", default)))
+        )
+    except Exception:
+        return default
 
 def predict_mask(image_path, threshold=0.35, min_area=80): # Predict a binary tumor mask from one MRI image.
     """
