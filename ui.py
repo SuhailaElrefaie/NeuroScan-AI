@@ -533,100 +533,141 @@ def predict_uploaded_3d_npz(uploaded_file, threshold=0.5):
     }
 
 
-def create_3d_mri_volume_plot(image_volume, mask_3d, modality_index=0, max_mri_points=12000, max_tumor_points=6000):
+def create_3d_tumor_volume_render(mask_3d):
     """
-    Create an interactive 3D visualization showing:
-    - MRI volume as grey points
-    - predicted tumor mask as red points
+    Clean 3D visualization for the predicted tumor only.
 
-    The user can rotate, zoom, and inspect the MRI volume.
+    This replaces the old noisy MRI point-cloud plot. It crops around the
+    predicted tumor so the 3D view is lighter, cleaner, and easier to read.
     """
+    mask = np.asarray(mask_3d, dtype=np.float32)
 
-    # Pick one MRI modality/channel to display
-    mri = image_volume[modality_index]
-
-    # Normalize MRI for display
-    mri = np.asarray(mri, dtype=np.float32)
-    mri_min = mri.min()
-    mri_max = mri.max()
-
-    if mri_max - mri_min < 1e-8:
+    if mask.sum() == 0:
         return None
 
-    mri_norm = (mri - mri_min) / (mri_max - mri_min)
+    coords = np.argwhere(mask > 0)
 
-    # Keep only brighter MRI voxels so the plot is not too crowded
-    mri_threshold = np.percentile(mri_norm, 70)
-    z_mri, y_mri, x_mri = np.where(mri_norm > mri_threshold)
-
-    if len(x_mri) == 0:
+    if coords.size == 0:
         return None
 
-    # Downsample MRI points
-    if len(x_mri) > max_mri_points:
-        indices = np.random.choice(len(x_mri), size=max_mri_points, replace=False)
-        x_mri = x_mri[indices]
-        y_mri = y_mri[indices]
-        z_mri = z_mri[indices]
+    depth, height, width = mask.shape
+    pad = 3
 
-    # Tumor points
-    z_tumor, y_tumor, x_tumor = np.where(mask_3d > 0)
+    z_min, y_min, x_min = coords.min(axis=0)
+    z_max, y_max, x_max = coords.max(axis=0)
 
-    if len(x_tumor) > max_tumor_points:
-        indices = np.random.choice(len(x_tumor), size=max_tumor_points, replace=False)
-        x_tumor = x_tumor[indices]
-        y_tumor = y_tumor[indices]
-        z_tumor = z_tumor[indices]
+    z_min = max(0, z_min - pad)
+    y_min = max(0, y_min - pad)
+    x_min = max(0, x_min - pad)
+
+    z_max = min(depth - 1, z_max + pad)
+    y_max = min(height - 1, y_max + pad)
+    x_max = min(width - 1, x_max + pad)
+
+    cropped = mask[z_min:z_max + 1, y_min:y_max + 1, x_min:x_max + 1]
+
+    z, y, x = np.mgrid[
+        z_min:z_max + 1,
+        y_min:y_max + 1,
+        x_min:x_max + 1
+    ]
 
     fig = go.Figure()
 
-    # Grey MRI structure
     fig.add_trace(
-        go.Scatter3d(
-            x=x_mri,
-            y=y_mri,
-            z=z_mri,
-            mode="markers",
-            marker=dict(
-                size=2,
-                color="lightgray",
-                opacity=0.18
-            ),
-            name="MRI Volume"
+        go.Volume(
+            x=x.flatten(),
+            y=y.flatten(),
+            z=z.flatten(),
+            value=cropped.flatten(),
+            isomin=0.5,
+            isomax=1.0,
+            opacity=0.28,
+            surface_count=5,
+            caps=dict(x_show=False, y_show=False, z_show=False),
+            colorscale="Reds",
+            name="Predicted Tumor Volume"
         )
     )
 
-    # Red tumor mask
-    if len(x_tumor) > 0:
-        fig.add_trace(
-            go.Scatter3d(
-                x=x_tumor,
-                y=y_tumor,
-                z=z_tumor,
-                mode="markers",
-                marker=dict(
-                    size=3,
-                    color="red",
-                    opacity=0.85
-                ),
-                name="Predicted Tumor Mask"
-            )
+    zc, yc, xc = coords.mean(axis=0)
+
+    fig.add_trace(
+        go.Scatter3d(
+            x=[xc],
+            y=[yc],
+            z=[zc],
+            mode="markers",
+            marker=dict(
+                size=7,
+                color="gold",
+                symbol="diamond"
+            ),
+            name="Tumor Center"
         )
+    )
 
     fig.update_layout(
-        title="Interactive 3D MRI Volume with Predicted Tumor Mask",
+        title="3D Predicted Tumor Volume",
+        height=620,
+        margin=dict(l=0, r=0, b=0, t=45),
         scene=dict(
             xaxis_title="Width",
             yaxis_title="Height",
-            zaxis_title="Slice / Depth",
-            aspectmode="data"
+            zaxis_title="Slice",
+            aspectmode="data",
+            xaxis=dict(showbackground=False),
+            yaxis=dict(showbackground=False),
+            zaxis=dict(showbackground=False)
         ),
-        height=650,
-        margin=dict(l=0, r=0, b=0, t=45),
-        legend=dict(
-            x=0,
-            y=1
+        legend=dict(x=0, y=1)
+    )
+
+    return fig
+
+
+def create_tumor_area_by_slice_chart(mask_3d):
+    """
+    Shows how the predicted tumor area changes across MRI slices.
+    This is clearer and more report-friendly than a noisy 3D point cloud.
+    """
+    mask = np.asarray(mask_3d, dtype=np.uint8)
+
+    slice_areas = mask.sum(axis=(1, 2))
+
+    if slice_areas.max() == 0:
+        return None
+
+    slices = np.arange(len(slice_areas))
+    largest_slice = int(slice_areas.argmax())
+
+    fig = go.Figure()
+
+    fig.add_trace(
+        go.Scatter(
+            x=slices,
+            y=slice_areas,
+            mode="lines+markers",
+            name="Predicted tumor area",
+            line=dict(width=3),
+            marker=dict(size=6)
         )
+    )
+
+    fig.add_vline(
+        x=largest_slice,
+        line_width=2,
+        line_dash="dash",
+        annotation_text=f"Largest slice: {largest_slice}",
+        annotation_position="top"
+    )
+
+    fig.update_layout(
+        title="Predicted Tumor Area Across MRI Slices",
+        xaxis_title="MRI Slice",
+        yaxis_title="Predicted Tumor Pixels",
+        height=420,
+        margin=dict(l=20, r=20, t=50, b=20)
     )
 
     return fig
@@ -1127,6 +1168,7 @@ if page == "Home":
             unsafe_allow_html=True
         )
 
+    st.markdown("<div style='height: 20px;'></div>", unsafe_allow_html=True)
     st.info("Tip: If you do not have MRI files, open an Analysis page and use the sample downloads in the sidebar.")
 
 
@@ -1443,22 +1485,25 @@ elif page == "3D MRI Analysis":
                 st.metric("Ground Truth Tumor Voxels", true_voxels)
 
         st.markdown("---")
-        st.markdown("### Optional Interactive 3D Pixel View")
+        st.markdown("### 3D Tumor Visualization")
 
-        fig_3d = create_3d_mri_volume_plot(
-            image_volume=result["image"],
-            mask_3d=result["pred_mask"],
-            modality_index=modality_index
-        )
+        area_chart = create_tumor_area_by_slice_chart(result["pred_mask"])
 
-        if fig_3d is not None:
-            st.plotly_chart(fig_3d, use_container_width=True)
+        if area_chart is not None:
+            st.plotly_chart(area_chart, use_container_width=True)
+        else:
+            st.info("No predicted tumor area found across slices.")
+
+        volume_fig = create_3d_tumor_volume_render(result["pred_mask"])
+
+        if volume_fig is not None:
+            st.plotly_chart(volume_fig, use_container_width=True)
             st.caption(
-                "Drag to rotate, scroll to zoom, and inspect the MRI volume. "
-                "Grey points show the MRI structure, and red points show the predicted tumor mask."
+                "This visualization shows the predicted tumor volume only. "
+                "The gold marker indicates the approximate tumor center."
             )
         else:
-            st.info("No 3D MRI volume could be displayed.")
+            st.info("No 3D tumor volume could be displayed.")
 
 # =========================
 # Page 3: 2D Training Progress
