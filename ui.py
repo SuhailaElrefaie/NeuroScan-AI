@@ -6,7 +6,7 @@ import glob
 import numpy as np
 import pandas as pd
 import streamlit as st
-from PIL import Image
+from PIL import Image, ImageDraw
 
 import plotly.graph_objects as go
 
@@ -335,6 +335,192 @@ def get_3d_display_slices(result, slice_index, modality_index=0, overlay_alpha=0
     return input_img, pred_mask_img, true_mask_img, overlay_img, prob_img
 
 
+
+def normalize_slice_for_viewer(slice_2d, window_mode="Auto contrast", window_center=0.0, window_width=4.0):
+    """Medical-viewer style brightness/contrast for display only."""
+    arr = np.asarray(slice_2d, dtype=np.float32)
+    arr = np.nan_to_num(arr)
+
+    if window_mode == "Manual":
+        low = float(window_center) - float(window_width) / 2.0
+        high = float(window_center) + float(window_width) / 2.0
+    else:
+        low, high = np.percentile(arr, (1, 99))
+
+    if high - low < 1e-8:
+        low, high = float(arr.min()), float(arr.max())
+
+    if high - low < 1e-8:
+        return np.zeros_like(arr, dtype=np.uint8)
+
+    arr = np.clip(arr, low, high)
+    arr = (arr - low) / (high - low + 1e-8)
+    return (arr * 255).astype(np.uint8)
+
+
+def get_mask_boundary(mask_2d):
+    """Return the contour/boundary pixels of a binary mask without extra dependencies."""
+    mask = np.asarray(mask_2d).astype(bool)
+
+    if mask.sum() == 0:
+        return mask
+
+    padded = np.pad(mask, 1, mode="constant", constant_values=False)
+    center = padded[1:-1, 1:-1]
+    neighbors_all = (
+        padded[:-2, 1:-1] &
+        padded[2:, 1:-1] &
+        padded[1:-1, :-2] &
+        padded[1:-1, 2:] &
+        padded[:-2, :-2] &
+        padded[:-2, 2:] &
+        padded[2:, :-2] &
+        padded[2:, 2:]
+    )
+    return center & (~neighbors_all)
+
+
+def create_real_viewer_image(
+    image_slice,
+    mask_slice,
+    probability_slice=None,
+    mode="Contour + Overlay",
+    overlay_alpha=0.35,
+    window_mode="Auto contrast",
+    window_center=0.0,
+    window_width=4.0,
+    display_width=720
+):
+    """Create a PACS-like 2D viewer image with contour/overlay/windowing."""
+    base = normalize_slice_for_viewer(
+        image_slice,
+        window_mode=window_mode,
+        window_center=window_center,
+        window_width=window_width
+    )
+
+    mask = np.asarray(mask_slice).astype(bool)
+    boundary = get_mask_boundary(mask)
+    rgb = np.stack([base] * 3, axis=-1).astype(np.float32)
+
+    if mode == "MRI only":
+        out = rgb
+
+    elif mode == "Prediction mask":
+        out = np.zeros_like(rgb)
+        out[mask] = [255, 45, 45]
+        out[boundary] = [255, 230, 80]
+
+    elif mode == "Probability map" and probability_slice is not None:
+        prob = np.asarray(probability_slice, dtype=np.float32)
+        prob = np.nan_to_num(prob)
+        prob = np.clip(prob, 0, 1)
+        heat = np.zeros_like(rgb)
+        heat[:, :, 0] = 255 * prob
+        heat[:, :, 1] = 180 * np.maximum(prob - 0.35, 0) / 0.65
+        out = (0.55 * rgb + 0.75 * heat)
+        out = np.clip(out, 0, 255)
+
+    else:
+        out = rgb.copy()
+
+        if mode in ["Overlay", "Contour + Overlay"]:
+            red = np.zeros_like(rgb)
+            red[:, :, 0] = 255
+            out[mask] = (1 - overlay_alpha) * out[mask] + overlay_alpha * red[mask]
+
+        if mode in ["Contour only", "Contour + Overlay"]:
+            out[boundary] = [255, 35, 35]
+
+            # Add a tiny yellow highlight where the contour is strongest/visible.
+            if mask.sum() > 0:
+                ys, xs = np.where(mask)
+                cy, cx = int(np.mean(ys)), int(np.mean(xs))
+                y0, y1 = max(0, cy - 2), min(out.shape[0], cy + 3)
+                x0, x1 = max(0, cx - 2), min(out.shape[1], cx + 3)
+                out[y0:y1, x0:x1] = [255, 230, 80]
+
+    out = np.clip(out, 0, 255).astype(np.uint8)
+    image = Image.fromarray(out)
+    return resize_for_display(image, width=display_width)
+
+
+def create_viewer_filmstrip(
+    result,
+    center_slice,
+    modality_index=0,
+    overlay_alpha=0.35,
+    window_mode="Auto contrast",
+    window_center=0.0,
+    window_width=4.0,
+    count=9,
+    thumb_size=92
+):
+    """Create a small slice filmstrip like a lightweight medical viewer."""
+    depth = result["depth"]
+    half = count // 2
+    indices = [min(max(0, center_slice + i), depth - 1) for i in range(-half, half + 1)]
+
+    thumbs = []
+    for idx in indices:
+        image_slice = result["image"][modality_index, idx]
+        mask_slice = result["pred_mask"][idx]
+        prob_slice = result["probability"][idx]
+
+        thumb = create_real_viewer_image(
+            image_slice,
+            mask_slice,
+            prob_slice,
+            mode="Contour + Overlay",
+            overlay_alpha=overlay_alpha,
+            window_mode=window_mode,
+            window_center=window_center,
+            window_width=window_width,
+            display_width=thumb_size
+        ).resize((thumb_size, thumb_size), Image.Resampling.LANCZOS)
+        thumbs.append((idx, thumb))
+
+    strip_h = thumb_size + 24
+    strip_w = len(thumbs) * (thumb_size + 8) - 8
+    strip = Image.new("RGB", (strip_w, strip_h), color=(7, 11, 16))
+    draw = ImageDraw.Draw(strip)
+
+    x = 0
+    for idx, thumb in thumbs:
+        strip.paste(thumb, (x, 0))
+        outline = (0, 123, 255) if idx == center_slice else (55, 65, 81)
+        draw.rectangle([x, 0, x + thumb_size - 1, thumb_size - 1], outline=outline, width=2)
+        draw.text((x + 6, thumb_size + 5), f"S{idx}", fill=(210, 210, 210))
+        x += thumb_size + 8
+
+    return strip
+
+
+def preprocess_uploaded_3d_mask(mask_array):
+    import torch
+    import torch.nn.functional as F
+
+    mask = np.asarray(mask_array)
+    mask = np.nan_to_num(mask)
+
+    if mask.ndim == 4:
+        mask = np.squeeze(mask)
+
+    if mask.ndim != 3:
+        return None
+
+    mask_tensor = torch.from_numpy((mask > 0).astype(np.float32))
+    mask_tensor = mask_tensor.unsqueeze(0).unsqueeze(0)
+
+    mask_tensor = F.interpolate(
+        mask_tensor,
+        size=(DEPTH_3D, IMAGE_SIZE_3D[0], IMAGE_SIZE_3D[1]),
+        mode="nearest"
+    )
+
+    return (mask_tensor.squeeze().numpy() > 0.5).astype(np.uint8)
+
+
 def get_representative_3d_indices(mask_3d):
     """Find useful axial/coronal/sagittal indices from the prediction mask."""
     mask_3d = np.asarray(mask_3d)
@@ -496,6 +682,10 @@ def predict_uploaded_3d_npz(uploaded_file, threshold=0.5):
         first_key = data.files[0]
         array = data[first_key]
 
+    true_mask = None
+    if "mask" in data.files:
+        true_mask = preprocess_uploaded_3d_mask(data["mask"])
+
     image_tensor = preprocess_uploaded_3d_array(array)
 
     model_path = get_3d_model_path()
@@ -522,7 +712,7 @@ def predict_uploaded_3d_npz(uploaded_file, threshold=0.5):
 
     return {
         "image": image_tensor.cpu().numpy(),
-        "true_mask": None,
+        "true_mask": true_mask,
         "probability": probability,
         "pred_mask": pred_mask,
         "num_volumes": 1,
@@ -801,6 +991,47 @@ st.markdown(
         color: #1f2937;
         font-size: 0.95rem;
     }
+
+
+    .viewer-panel {
+        background-color: #070b10;
+        border: 1px solid #1f2937;
+        border-radius: 18px;
+        padding: 18px 18px 14px 18px;
+        margin-bottom: 12px;
+        box-shadow: 0 14px 30px rgba(0, 0, 0, 0.20);
+    }
+
+    .viewer-title {
+        color: #e5e7eb;
+        font-weight: 700;
+        font-size: 1.05rem;
+        margin-bottom: 4px;
+    }
+
+    .viewer-subtitle {
+        color: #9ca3af;
+        font-size: 0.88rem;
+        margin-bottom: 10px;
+    }
+
+    .viewer-badge {
+        display: inline-block;
+        background-color: #111827;
+        border: 1px solid #374151;
+        color: #d1d5db;
+        border-radius: 999px;
+        padding: 6px 10px;
+        margin-right: 6px;
+        margin-bottom: 6px;
+        font-size: 0.82rem;
+    }
+
+    .viewer-small-note {
+        color: #6b7280;
+        font-size: 0.82rem;
+        margin-top: 4px;
+    }
     </style>
     """,
     unsafe_allow_html=True
@@ -1041,6 +1272,38 @@ elif page == "3D MRI Analysis":
             format_func=lambda x: f"Channel {x}"
         )
 
+        viewer_mode_3d = st.selectbox(
+            "Viewer Layer",
+            options=["Contour + Overlay", "Contour only", "Overlay", "MRI only", "Prediction mask", "Probability map"],
+            index=0,
+            help="Controls what the main medical-style viewer displays."
+        )
+
+        window_mode_3d = st.selectbox(
+            "Window / Level",
+            options=["Auto contrast", "Manual"],
+            index=0,
+            help="Auto contrast usually looks best for normalized MRI samples. Manual lets you adjust brightness/contrast."
+        )
+
+        window_center_3d = st.slider(
+            "Window Center",
+            min_value=-3.0,
+            max_value=3.0,
+            value=0.0,
+            step=0.1,
+            disabled=(window_mode_3d == "Auto contrast")
+        )
+
+        window_width_3d = st.slider(
+            "Window Width",
+            min_value=0.5,
+            max_value=8.0,
+            value=4.0,
+            step=0.1,
+            disabled=(window_mode_3d == "Auto contrast")
+        )
+
 
 # =========================
 # Model metric summary values
@@ -1168,7 +1431,7 @@ if page == "Home":
             unsafe_allow_html=True
         )
 
-    st.markdown("<div style='height: 20px;'></div>", unsafe_allow_html=True)
+    st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
     st.info("Tip: If you do not have MRI files, open an Analysis page and use the sample downloads in the sidebar.")
 
 
@@ -1328,18 +1591,18 @@ elif page == "3D MRI Analysis":
     st.markdown("---")
     st.subheader("3D MRI Volume Analysis")
 
-
     uploaded_3d_file = st.file_uploader(
         "Upload 3D MRI volume (.NPZ)",
         type=["npz"],
-        help="Expected array shape: [4, D, H, W], [D, H, W, 4], or [D, H, W]. If the file contains one array named 'image', it will be used.",
+        help="Expected array shape: [4, D, H, W], [D, H, W, 4], or [D, H, W]. If the file contains arrays named 'image' and 'mask', both will be used.",
         key=f"upload_3d_{st.session_state['upload_reset_counter']}"
     )
 
     if uploaded_3d_file:
         upload_signature = (
             f"{uploaded_3d_file.name}_{uploaded_3d_file.size}_"
-            f"{threshold_3d}_{overlay_alpha_3d}_{modality_index}"
+            f"{threshold_3d}_{overlay_alpha_3d}_{modality_index}_{viewer_mode_3d}_"
+            f"{window_mode_3d}_{window_center_3d}_{window_width_3d}"
         )
 
         if st.session_state.get("last_3d_upload_signature") != upload_signature:
@@ -1361,149 +1624,141 @@ elif page == "3D MRI Analysis":
             del st.session_state["last_3d_upload_signature"]
 
         st.info(
-            "Upload a .NPZ 3D MRI volume to generate a predicted tumor mask, "
-            "slice overlays, probability map, and optional interactive 3D pixel view."
+            "Upload a .NPZ 3D MRI volume to open the clinical-style viewer with slice scrolling, "
+            "tumor contour overlay, prediction mask, probability map, and tumor-area chart."
         )
 
     if "result_3d" in st.session_state:
         result = st.session_state["result_3d"]
 
         suggested_slice, _, _ = get_representative_3d_indices(result["pred_mask"])
+        tumor_voxels = int(result["pred_mask"].sum())
+        true_voxels = int(result["true_mask"].sum()) if result.get("true_mask") is not None else None
 
-        st.markdown("### 3D Slice Explorer")
-        st.caption(
-            "Use the slider to move through the uploaded MRI volume. "
-            "The default slice is selected from the largest predicted tumor area."
+        st.markdown("### Clinical-Style MRI Viewer")
+        st.markdown(
+            f"""
+            <div class='viewer-panel'>
+                <div class='viewer-title'>3D MRI segmentation viewer</div>
+                <div class='viewer-subtitle'>Slice-based inspection with window/level display, tumor contour overlay, and model probability review.</div>
+                <span class='viewer-badge'>Model input: {DEPTH_3D} × {IMAGE_SIZE_3D[0]} × {IMAGE_SIZE_3D[1]}</span>
+                <span class='viewer-badge'>Modality channel: {modality_index}</span>
+                <span class='viewer-badge'>Threshold: {threshold_3d:.2f}</span>
+                <span class='viewer-badge'>Predicted voxels: {tumor_voxels}</span>
+            </div>
+            """,
+            unsafe_allow_html=True
         )
 
         slice_index = st.slider(
-            "Slice",
+            "Scroll through MRI slices",
             min_value=0,
             max_value=result["depth"] - 1,
             value=suggested_slice,
             step=1,
-            help="Move through the 3D MRI volume slice by slice."
+            help="This behaves like scrolling through a lightweight medical viewer. The default slice is where the predicted tumor area is largest."
         )
 
-        (
-            input_img,
-            pred_mask_img,
-            true_mask_img,
-            overlay_img,
-            prob_img
-        ) = get_3d_display_slices(
+        image_slice = result["image"][modality_index, slice_index]
+        pred_mask_slice = result["pred_mask"][slice_index]
+        probability_slice = result["probability"][slice_index]
+        true_mask_slice = result["true_mask"][slice_index] if result.get("true_mask") is not None else None
+
+        viewer_img_display = create_real_viewer_image(
+            image_slice=image_slice,
+            mask_slice=pred_mask_slice,
+            probability_slice=probability_slice,
+            mode=viewer_mode_3d,
+            overlay_alpha=overlay_alpha_3d,
+            window_mode=window_mode_3d,
+            window_center=window_center_3d,
+            window_width=window_width_3d,
+            display_width=720
+        )
+
+        input_img, pred_mask_img, true_mask_img, overlay_img, prob_img = get_3d_display_slices(
             result,
             slice_index=slice_index,
             modality_index=modality_index,
             overlay_alpha=overlay_alpha_3d
         )
 
-        input_img_display = resize_for_display(input_img)
-        pred_mask_img_display = resize_for_display(pred_mask_img, resample=Image.Resampling.NEAREST)
-        overlay_img_display = resize_for_display(overlay_img)
-        prob_img_display = resize_for_display(prob_img)
-        true_mask_img_display = resize_for_display(true_mask_img, resample=Image.Resampling.NEAREST) if true_mask_img is not None else None
+        pred_mask_img_display = resize_for_display(pred_mask_img, width=320, resample=Image.Resampling.NEAREST)
+        prob_img_display = resize_for_display(prob_img, width=320)
+        overlay_img_display = resize_for_display(overlay_img, width=320)
+        true_mask_img_display = resize_for_display(true_mask_img, width=320, resample=Image.Resampling.NEAREST) if true_mask_img is not None else None
 
         st.session_state["export_3d"] = {
-            "input_img": image_to_png_bytes(input_img_display),
+            "input_img": image_to_png_bytes(viewer_img_display),
             "pred_mask_img": image_to_png_bytes(pred_mask_img_display),
             "overlay_img": image_to_png_bytes(overlay_img_display),
             "true_mask_img": image_to_png_bytes(true_mask_img_display) if true_mask_img_display is not None else None,
             "prob_img": image_to_png_bytes(prob_img_display),
-
-            "input_name": f"3d_volume_{result['volume_id']}_slice_{slice_index}_mri.png",
+            "input_name": f"3d_volume_{result['volume_id']}_slice_{slice_index}_viewer.png",
             "pred_name": f"3d_volume_{result['volume_id']}_slice_{slice_index}_prediction_mask.png",
             "overlay_name": f"3d_volume_{result['volume_id']}_slice_{slice_index}_overlay.png",
             "true_name": f"3d_volume_{result['volume_id']}_slice_{slice_index}_ground_truth.png",
             "prob_name": f"3d_volume_{result['volume_id']}_slice_{slice_index}_probability.png"
         }
 
-        if true_mask_img_display is not None:
-            col1, col2, col3, col4, col5 = st.columns(5)
+        main_view, side_view = st.columns([2.25, 1])
 
-            with col1:
-                st.markdown("#### MRI Slice")
-                st.image(input_img_display, use_container_width=True, caption=f"Slice {slice_index}")
+        with main_view:
+            st.image(
+                viewer_img_display,
+                use_container_width=True,
+                caption=f"Viewer mode: {viewer_mode_3d} | Slice {slice_index}"
+            )
 
-            with col2:
-                st.markdown("#### Prediction")
-                st.image(pred_mask_img_display, use_container_width=True, caption="Predicted tumor mask")
+            filmstrip = create_viewer_filmstrip(
+                result,
+                center_slice=slice_index,
+                modality_index=modality_index,
+                overlay_alpha=overlay_alpha_3d,
+                window_mode=window_mode_3d,
+                window_center=window_center_3d,
+                window_width=window_width_3d
+            )
+            st.image(filmstrip, use_container_width=True, caption="Slice filmstrip around the selected slice")
 
-            with col3:
-                st.markdown("#### Overlay")
-                st.image(overlay_img_display, use_container_width=True, caption="Prediction over MRI")
+        with side_view:
+            st.markdown("#### Segmentation panels")
+            st.image(pred_mask_img_display, use_container_width=True, caption="Prediction mask")
+            st.image(prob_img_display, use_container_width=True, caption="Probability map")
 
-            with col4:
-                st.markdown("#### Ground Truth")
-                st.image(true_mask_img_display, use_container_width=True, caption="Dataset mask")
-
-            with col5:
-                st.markdown("#### Probability")
-                st.image(prob_img_display, use_container_width=True, caption="Model probability map")
-
-        else:
-            col1, col2, col3, col4 = st.columns(4)
-
-            with col1:
-                st.markdown("#### MRI Slice")
-                st.image(input_img_display, use_container_width=True, caption=f"Slice {slice_index}")
-
-            with col2:
-                st.markdown("#### Prediction")
-                st.image(pred_mask_img_display, use_container_width=True, caption="Predicted tumor mask")
-
-            with col3:
-                st.markdown("#### Overlay")
-                st.image(overlay_img_display, use_container_width=True, caption="Prediction over MRI")
-
-            with col4:
-                st.markdown("#### Probability")
-                st.image(prob_img_display, use_container_width=True, caption="Model probability map")
+            if true_mask_img_display is not None:
+                st.image(true_mask_img_display, use_container_width=True, caption="Ground truth mask from sample file")
 
         st.markdown("---")
 
-        tumor_voxels = int(result["pred_mask"].sum())
-
-        if result.get("true_mask") is not None:
-            true_voxels = int(result["true_mask"].sum())
-            m1, m2, m3 = st.columns(3)
-        else:
-            true_voxels = None
-            m1, m2 = st.columns(2)
-
+        m1, m2, m3 = st.columns(3)
         with m1:
-            if tumor_voxels > 0:
-                st.metric("Prediction Result", "Detected")
-            else:
-                st.metric("Prediction Result", "Not detected")
-
+            st.metric("Prediction Result", "Detected" if tumor_voxels > 0 else "Not detected")
         with m2:
             st.metric("Predicted Tumor Voxels", tumor_voxels)
-
-        if true_voxels is not None:
-            with m3:
+        with m3:
+            if true_voxels is not None:
                 st.metric("Ground Truth Tumor Voxels", true_voxels)
+            else:
+                st.metric("Viewer Slice", slice_index)
 
-        st.markdown("---")
-        st.markdown("### 3D Tumor Visualization")
-
+        st.markdown("### Tumor Area Across Slices")
         area_chart = create_tumor_area_by_slice_chart(result["pred_mask"])
-
         if area_chart is not None:
             st.plotly_chart(area_chart, use_container_width=True)
+            st.caption("The dashed line marks the slice with the largest predicted tumor area.")
         else:
             st.info("No predicted tumor area found across slices.")
 
-        volume_fig = create_3d_tumor_volume_render(result["pred_mask"])
-
-        if volume_fig is not None:
-            st.plotly_chart(volume_fig, use_container_width=True)
-            st.caption(
-                "This visualization shows the predicted tumor volume only. "
-                "The gold marker indicates the approximate tumor center."
-            )
-        else:
-            st.info("No 3D tumor volume could be displayed.")
+        with st.expander("Advanced: experimental 3D tumor-only render", expanded=False):
+            volume_fig = create_3d_tumor_volume_render(result["pred_mask"])
+            if volume_fig is not None:
+                st.plotly_chart(volume_fig, use_container_width=True)
+                st.caption(
+                    "This is an optional tumor-only render. The main viewer above is the recommended clinical-style view."
+                )
+            else:
+                st.info("No 3D tumor volume could be displayed.")
 
 # =========================
 # Page 3: 2D Training Progress
