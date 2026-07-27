@@ -12,7 +12,7 @@ from dataset_3d import BraTS3DVolumeDataset
 from models.unet3d import UNet3D
 
 
-H5_DIR = "archive/BraTS2020_training_data/content/data"
+H5_DIR = "archive/BraTS2021_h5/content/data"
 
 RUNS_DIR = "runs_3d"
 BEST_DIR = "best_model_3d"
@@ -28,7 +28,7 @@ VAL_SPLIT = 0.2
 SEED = 42
 THRESHOLD = 0.5
 
-DEPTH = 48
+DEPTH = 32
 IMAGE_SIZE = (160, 160)
 
 def get_device():

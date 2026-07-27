@@ -37,7 +37,7 @@ BEST_MODEL_3D_PATH = "best_model_3d/best_unet3d.pth"
 LATEST_3D_RUN_METRICS_PATH = "runs_3d/run_3d_2026_05_14_191516/metrics_3d.json"
 
 DEPTH_3D = 32
-IMAGE_SIZE_3D = (128, 128)
+IMAGE_SIZE_3D = (160, 160)
 
 SAMPLE_2D_DIR = "sample_data/2d"
 SAMPLE_3D_DIR = "sample_data/3d"
