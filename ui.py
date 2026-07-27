@@ -6,7 +6,7 @@ import glob
 import numpy as np
 import pandas as pd
 import streamlit as st
-from PIL import Image
+from PIL import Image, ImageFilter
 
 
 from predict import predict_with_gradcam
@@ -285,6 +285,76 @@ def resize_for_display(image, width=384, resample=None):
     return image.resize((width, new_h), resample=resample)
 
 
+def smooth_mask_for_display(mask_img, width=384, threshold=96, blur_radius=0.6):
+    """
+    Display-only smoothing for coarse 3D masks.
+
+    The model prediction stays unchanged. This only upscales the binary mask more
+    gracefully so the displayed tumor region does not look like large blocks.
+    """
+    if mask_img is None:
+        return None
+
+    if not isinstance(mask_img, Image.Image):
+        mask_img = Image.fromarray(mask_img)
+
+    mask_img = mask_img.convert("L")
+    w, h = mask_img.size
+    new_h = max(1, int(h * (width / w)))
+
+    # LANCZOS creates an anti-aliased high-resolution mask instead of square blocks.
+    mask_large = mask_img.resize((width, new_h), resample=Image.Resampling.LANCZOS)
+
+    if blur_radius and blur_radius > 0:
+        mask_large = mask_large.filter(ImageFilter.GaussianBlur(radius=blur_radius))
+
+    # Re-threshold after smoothing so the mask remains clean and binary-looking.
+    mask_arr = np.asarray(mask_large, dtype=np.uint8)
+    mask_arr = np.where(mask_arr >= threshold, 255, 0).astype(np.uint8)
+
+    return Image.fromarray(mask_arr)
+
+
+def create_smooth_overlay_for_display(input_img, mask_img, width=384, overlay_alpha=0.28, blur_radius=1.1):
+    """
+    Create a cleaner display overlay from the original MRI slice and mask.
+
+    This blends a soft red mask at display resolution instead of first painting
+    a low-resolution mask and then stretching it with visible blocks.
+    """
+    if input_img is None or mask_img is None:
+        return None
+
+    if not isinstance(input_img, Image.Image):
+        input_img = Image.fromarray(input_img)
+    if not isinstance(mask_img, Image.Image):
+        mask_img = Image.fromarray(mask_img)
+
+    input_img = input_img.convert("L")
+    mask_img = mask_img.convert("L")
+
+    w, h = input_img.size
+    new_h = max(1, int(h * (width / w)))
+
+    mri_large = input_img.resize((width, new_h), resample=Image.Resampling.LANCZOS)
+    mask_soft = mask_img.resize((width, new_h), resample=Image.Resampling.LANCZOS)
+
+    if blur_radius and blur_radius > 0:
+        mask_soft = mask_soft.filter(ImageFilter.GaussianBlur(radius=blur_radius))
+
+    base = np.stack([np.asarray(mri_large, dtype=np.float32)] * 3, axis=-1)
+    red = np.zeros_like(base)
+    red[:, :, 0] = 255.0
+
+    alpha = (np.asarray(mask_soft, dtype=np.float32) / 255.0) * overlay_alpha
+    alpha = alpha[..., None]
+
+    overlay = base * (1.0 - alpha) + red * alpha
+    overlay = np.clip(overlay, 0, 255).astype(np.uint8)
+
+    return Image.fromarray(overlay)
+
+
 def create_3d_overlay(image_slice, mask_slice, overlay_alpha=0.35):
     image_uint8 = normalize_slice_for_display(image_slice)
     image_rgb = np.stack([image_uint8] * 3, axis=-1)
@@ -350,43 +420,6 @@ def get_representative_3d_indices(mask_3d):
     x_index = int(np.median(coords[:, 2]))
 
     return z_index, y_index, x_index
-
-
-def get_orthogonal_3d_views(result, modality_index=0, overlay_alpha=0.35):
-    """Create medical-style axial/coronal/sagittal overlays."""
-    image_volume = result["image"]
-    pred_mask = result["pred_mask"]
-
-    z_index, y_index, x_index = get_representative_3d_indices(pred_mask)
-
-    axial_img = image_volume[modality_index, z_index, :, :]
-    axial_mask = pred_mask[z_index, :, :]
-
-    coronal_img = image_volume[modality_index, :, y_index, :]
-    coronal_mask = pred_mask[:, y_index, :]
-
-    sagittal_img = image_volume[modality_index, :, :, x_index]
-    sagittal_mask = pred_mask[:, :, x_index]
-
-    views = {
-        "Axial": {
-            "index": z_index,
-            "image": resize_for_display(Image.fromarray(normalize_slice_for_display(axial_img))),
-            "overlay": resize_for_display(create_3d_overlay(axial_img, axial_mask, overlay_alpha)),
-        },
-        "Coronal": {
-            "index": y_index,
-            "image": resize_for_display(Image.fromarray(normalize_slice_for_display(coronal_img))),
-            "overlay": resize_for_display(create_3d_overlay(coronal_img, coronal_mask, overlay_alpha)),
-        },
-        "Sagittal": {
-            "index": x_index,
-            "image": resize_for_display(Image.fromarray(normalize_slice_for_display(sagittal_img))),
-            "overlay": resize_for_display(create_3d_overlay(sagittal_img, sagittal_mask, overlay_alpha)),
-        },
-    }
-
-    return views, z_index
 
 
 def predict_3d_volume(volume_index=0, threshold=0.5):
@@ -1221,7 +1254,7 @@ elif page == "3D MRI Analysis":
 
         st.info(
             "Upload a .NPZ 3D MRI volume to generate a predicted tumor mask, "
-            "slice overlays, probability map, and optional interactive 3D pixel view."
+            "slice overlays and probability map."
         )
 
     if "result_3d" in st.session_state:
@@ -1258,10 +1291,14 @@ elif page == "3D MRI Analysis":
         )
 
         input_img_display = resize_for_display(input_img)
-        pred_mask_img_display = resize_for_display(pred_mask_img, resample=Image.Resampling.NEAREST)
-        overlay_img_display = resize_for_display(overlay_img)
+        pred_mask_img_display = smooth_mask_for_display(pred_mask_img)
+        overlay_img_display = create_smooth_overlay_for_display(
+            input_img,
+            pred_mask_img,
+            overlay_alpha=overlay_alpha_3d
+        )
         prob_img_display = resize_for_display(prob_img)
-        true_mask_img_display = resize_for_display(true_mask_img, resample=Image.Resampling.NEAREST) if true_mask_img is not None else None
+        true_mask_img_display = smooth_mask_for_display(true_mask_img) if true_mask_img is not None else None
 
         st.session_state["export_3d"] = {
             "input_img": image_to_png_bytes(input_img_display),
@@ -1286,15 +1323,15 @@ elif page == "3D MRI Analysis":
 
             with col2:
                 st.markdown("#### Prediction")
-                st.image(pred_mask_img_display, use_container_width=True, caption="Predicted tumor mask")
+                st.image(pred_mask_img_display, use_container_width=True, caption="Predicted tumor mask (smoothed for display)")
 
             with col3:
                 st.markdown("#### Overlay")
-                st.image(overlay_img_display, use_container_width=True, caption="Prediction over MRI")
+                st.image(overlay_img_display, use_container_width=True, caption="Prediction over MRI (display-smoothed)")
 
             with col4:
                 st.markdown("#### Ground Truth")
-                st.image(true_mask_img_display, use_container_width=True, caption="Dataset mask")
+                st.image(true_mask_img_display, use_container_width=True, caption="Dataset mask (smoothed for display)")
 
             with col5:
                 st.markdown("#### Probability")
@@ -1309,11 +1346,11 @@ elif page == "3D MRI Analysis":
 
             with col2:
                 st.markdown("#### Prediction")
-                st.image(pred_mask_img_display, use_container_width=True, caption="Predicted tumor mask")
+                st.image(pred_mask_img_display, use_container_width=True, caption="Predicted tumor mask (smoothed for display)")
 
             with col3:
                 st.markdown("#### Overlay")
-                st.image(overlay_img_display, use_container_width=True, caption="Prediction over MRI")
+                st.image(overlay_img_display, use_container_width=True, caption="Prediction over MRI (display-smoothed)")
 
             with col4:
                 st.markdown("#### Probability")
