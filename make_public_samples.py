@@ -24,7 +24,7 @@ TWO_D_CANDIDATE_DIRS = [
     Path("Data/segmentation_task/train/images"),
 ]
 
-H5_DIR = "archive/BraTS2020_training_data/content/data"
+H5_DIR = "archive/BraTS2021_h5/content/data"
 
 
 SUPPORTED_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg"}
@@ -87,8 +87,8 @@ def create_3d_samples(max_samples=5):
 
     dataset = BraTS3DVolumeDataset(
         h5_dir=H5_DIR,
-        depth=16,
-        image_size=(96, 96),
+        depth=32,
+        image_size=(160, 160),
         augment=False,
         only_tumor_windows=True,
     )
