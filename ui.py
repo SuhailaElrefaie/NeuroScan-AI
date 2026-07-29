@@ -12,6 +12,7 @@ from PIL import Image, ImageFilter
 from predict import predict_with_gradcam
 
 
+from full_volume_3d import MODALITY_NAMES, build_tumor_figure, predict_full_volume_npz
 # =========================
 # Page setup
 # =========================
@@ -458,113 +459,20 @@ def get_3d_model_path():
     return None
 
 
-def preprocess_uploaded_3d_array(array):
-    import torch
-    import torch.nn.functional as F
-
-    array = np.asarray(array, dtype=np.float32)
-    array = np.nan_to_num(array)
-
-    # Accepted shapes:
-    # [4, D, H, W]
-    # [D, H, W, 4]
-    # [D, H, W] -> repeated into 4 channels
-    if array.ndim == 4:
-        if array.shape[0] == 4:
-            image = array
-        elif array.shape[-1] == 4:
-            image = np.moveaxis(array, -1, 0)
-        else:
-            raise ValueError(
-                "Uploaded 4D volume must have 4 channels as either "
-                "[4, D, H, W] or [D, H, W, 4]."
-            )
-
-    elif array.ndim == 3:
-        # If the upload has only one MRI channel, repeat it to 4 channels
-        # so it can enter the 3D model.
-        image = np.stack([array] * 4, axis=0)
-
-    else:
-        raise ValueError(
-            "Uploaded volume must be 3D or 4D. Expected [4,D,H,W], [D,H,W,4], or [D,H,W]."
-        )
-
-    mean = image.mean()
-    std = image.std()
-
-    if std < 1e-8:
-        image = image * 0.0
-    else:
-        image = (image - mean) / std
-
-    image_tensor = torch.from_numpy(image).float()
-
-    # Add batch dimension: [1, 4, D, H, W]
-    image_tensor = image_tensor.unsqueeze(0)
-
-    image_tensor = F.interpolate(
-        image_tensor,
-        size=(DEPTH_3D, IMAGE_SIZE_3D[0], IMAGE_SIZE_3D[1]),
-        mode="trilinear",
-        align_corners=False
-    )
-
-    # Remove batch dimension: [4, DEPTH_3D, H, W]
-    image_tensor = image_tensor.squeeze(0)
-
-    return image_tensor
-
-
 def predict_uploaded_3d_npz(uploaded_file, threshold=0.5):
-    import torch
-    from models.unet3d import UNet3D
-
-    data = np.load(uploaded_file)
-
-    if "image" in data.files:
-        array = data["image"]
-    else:
-        first_key = data.files[0]
-        array = data[first_key]
-
-    image_tensor = preprocess_uploaded_3d_array(array)
-
     model_path = get_3d_model_path()
-
     if model_path is None:
         raise FileNotFoundError(
             "No 3D model found. Expected best_model_3d/best_unet3d.pth "
             "or a model_3d.pth inside runs_3d."
         )
 
-    device = get_device_3d()
-
-    model = UNet3D(in_channels=4, out_channels=1).to(device)
-    model.load_state_dict(torch.load(model_path, map_location=device))
-    model.eval()
-
-    image_batch = image_tensor.unsqueeze(0).to(device)
-
-    with torch.no_grad():
-        logits = model(image_batch)
-        probability = torch.sigmoid(logits).squeeze().cpu().numpy()
-
-    pred_mask = (probability > threshold).astype(np.uint8)
-
-    return {
-        "image": image_tensor.cpu().numpy(),
-        "true_mask": None,
-        "probability": probability,
-        "pred_mask": pred_mask,
-        "num_volumes": 1,
-        "depth": image_tensor.shape[1],
-        "volume_id": "uploaded",
-        "source_type": "upload",
-        "model_path": model_path
-    }
-
-
+    return predict_full_volume_npz(
+        uploaded_file=uploaded_file,
+        model_path=model_path,
+        device=get_device_3d(),
+        threshold=threshold,
+    )
 # =========================
 # Styling
 # =========================
@@ -928,9 +836,11 @@ elif page == "3D MRI Analysis":
         )
 
         modality_index = st.selectbox(
-            "MRI Modality Channel",
+            "MRI Modality",
             options=[0, 1, 2, 3],
-            format_func=lambda x: f"Channel {x}"
+            index=0,
+            format_func=lambda x: MODALITY_NAMES[x],
+            help="The model uses all four modalities. This control only changes the MRI shown in the viewer."
         )
 
 
@@ -1224,7 +1134,7 @@ elif page == "3D MRI Analysis":
     uploaded_3d_file = st.file_uploader(
         "Upload 3D MRI volume (.NPZ)",
         type=["npz"],
-        help="Expected array shape: [4, D, H, W], [D, H, W, 4], or [D, H, W]. If the file contains one array named 'image', it will be used.",
+        help="Supports full patient volumes such as [4,155,240,240], plus older 32-slice samples. The model processes full volumes in overlapping 32-slice windows.",
         key=f"upload_3d_{st.session_state['upload_reset_counter']}"
     )
 
@@ -1289,16 +1199,14 @@ elif page == "3D MRI Analysis":
             modality_index=modality_index,
             overlay_alpha=overlay_alpha_3d
         )
-
-        input_img_display = resize_for_display(input_img)
-        pred_mask_img_display = smooth_mask_for_display(pred_mask_img)
-        overlay_img_display = create_smooth_overlay_for_display(
-            input_img,
-            pred_mask_img,
-            overlay_alpha=overlay_alpha_3d
+        input_img_display = resize_for_display(input_img, resample=Image.Resampling.LANCZOS)
+        pred_mask_img_display = resize_for_display(pred_mask_img, resample=Image.Resampling.NEAREST)
+        overlay_img_display = resize_for_display(overlay_img, resample=Image.Resampling.NEAREST)
+        prob_img_display = resize_for_display(prob_img, resample=Image.Resampling.LANCZOS)
+        true_mask_img_display = (
+            resize_for_display(true_mask_img, resample=Image.Resampling.NEAREST)
+            if true_mask_img is not None else None
         )
-        prob_img_display = resize_for_display(prob_img)
-        true_mask_img_display = smooth_mask_for_display(true_mask_img) if true_mask_img is not None else None
 
         st.session_state["export_3d"] = {
             "input_img": image_to_png_bytes(input_img_display),
@@ -1323,15 +1231,15 @@ elif page == "3D MRI Analysis":
 
             with col2:
                 st.markdown("#### Prediction")
-                st.image(pred_mask_img_display, use_container_width=True, caption="Predicted tumor mask (smoothed for display)")
+                st.image(pred_mask_img_display, use_container_width=True, caption="Predicted tumor mask")
 
             with col3:
                 st.markdown("#### Overlay")
-                st.image(overlay_img_display, use_container_width=True, caption="Prediction over MRI (display-smoothed)")
+                st.image(overlay_img_display, use_container_width=True, caption="Prediction over MRI")
 
             with col4:
                 st.markdown("#### Ground Truth")
-                st.image(true_mask_img_display, use_container_width=True, caption="Dataset mask (smoothed for display)")
+                st.image(true_mask_img_display, use_container_width=True, caption="Dataset ground-truth mask")
 
             with col5:
                 st.markdown("#### Probability")
@@ -1346,11 +1254,11 @@ elif page == "3D MRI Analysis":
 
             with col2:
                 st.markdown("#### Prediction")
-                st.image(pred_mask_img_display, use_container_width=True, caption="Predicted tumor mask (smoothed for display)")
+                st.image(pred_mask_img_display, use_container_width=True, caption="Predicted tumor mask")
 
             with col3:
                 st.markdown("#### Overlay")
-                st.image(overlay_img_display, use_container_width=True, caption="Prediction over MRI (display-smoothed)")
+                st.image(overlay_img_display, use_container_width=True, caption="Prediction over MRI")
 
             with col4:
                 st.markdown("#### Probability")
@@ -1380,6 +1288,21 @@ elif page == "3D MRI Analysis":
             with m3:
                 st.metric("Ground Truth Tumor Voxels", true_voxels)
 
+
+
+        st.markdown("---")
+        st.markdown("### Interactive Full-Volume 3D View")
+        st.caption(
+            "Drag to rotate, scroll to zoom, and double-click to reset. "
+            "Grey shows MRI anatomy and red shows the model's predicted tumour."
+        )
+        figure_3d = build_tumor_figure(result, modality_index=modality_index)
+        st.plotly_chart(figure_3d, use_container_width=True)
+        if result.get("window_count", 1) > 1:
+            st.caption(
+                f"Full depth: {result['depth']} slices. The existing 32-slice model was run over "
+                f"{result['window_count']} overlapping windows and merged into one prediction."
+            )
 # =========================
 # Page 3: 2D Training Progress
 # =========================
