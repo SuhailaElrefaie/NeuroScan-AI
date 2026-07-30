@@ -1,15 +1,18 @@
 {
-    "Validation loss": 0.219622097119689,
-    "Dice coefficient": 0.8793682678639889,
-    "Mean IoU": 0.805403870144241,
-    "Precision": 0.8443897515344704,
-    "Recall / Sensitivity": 0.9457822075105162,
-    "Epoch": 37,
-    "Threshold": 0.5,
-    "Depth": 32,
-    "Image size": [
-        160,
-        160
-    ],
-    "Run folder": "runs_3d/run_3d_2026_07_26_231135"
+  "Dice coefficient": 0.9325947023897077,
+  "Mean IoU": 0.8737025237532557,
+  "Precision": 0.9368460025292993,
+  "Recall / Sensitivity": 0.9283818117808279,
+  "Threshold": 0.55,
+  "Epoch": 35,
+  "Depth": 32,
+  "Image size": [
+    160,
+    160
+  ],
+  "Train patients": 1001,
+  "Validation patients": 250,
+  "Normalization": "per-modality non-zero z-score",
+  "Validation": "patient-level split with full-depth overlapping windows",
+  "Run folder": "runs_3d_v2/run_3d_v2_2026_07_29_172732"
 }

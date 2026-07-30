@@ -823,7 +823,7 @@ elif page == "3D MRI Analysis":
             "3D Segmentation Threshold",
             min_value=0.10,
             max_value=0.90,
-            value=0.50,
+            value=0.55,
             step=0.05
         )
 
@@ -1428,27 +1428,43 @@ elif page == "3D Training Progress":
         history_3d = load_csv(latest_3d_history_path)
         history_source = latest_3d_history_path
 
+    dice_column = None
+    if history_3d is not None:
+        if "val_dice" in history_3d.columns:
+            dice_column = "val_dice"
+        elif "val_dice_at_0.5" in history_3d.columns:
+            dice_column = "val_dice_at_0.5"
+
+    best_epoch = int(metrics_3d.get("Epoch", 0)) if metrics_3d is not None else 0
+    best_val_loss = None
+
+    if history_3d is not None and not history_3d.empty and "val_loss" in history_3d.columns:
+        matching_row = history_3d.loc[history_3d["epoch"] == best_epoch]
+
+        if not matching_row.empty:
+            best_val_loss = float(matching_row["val_loss"].iloc[0])
+        elif dice_column is not None:
+            best_row_index = history_3d[dice_column].idxmax()
+            best_epoch = int(history_3d.loc[best_row_index, "epoch"])
+            best_val_loss = float(history_3d.loc[best_row_index, "val_loss"])
+        else:
+            best_val_loss = float(history_3d["val_loss"].iloc[-1])
+
     if metrics_3d is not None:
         st.caption(f"3D metrics source: {metrics_source}")
 
         c1, c2, c3 = st.columns(3)
 
         with c1:
-            st.metric(
-                "Best 3D Dice",
-                f"{metrics_3d.get('Dice coefficient', 0):.4f}"
-            )
+            st.metric("Best 3D Dice", f"{metrics_3d.get('Dice coefficient', 0):.4f}")
 
         with c2:
-            st.metric(
-                "Best Epoch",
-                int(metrics_3d.get("Epoch", 0))
-            )
+            st.metric("Best Epoch", best_epoch)
 
         with c3:
             st.metric(
                 "Validation Loss",
-                f"{metrics_3d.get('Validation loss', 0):.4f}"
+                f"{best_val_loss:.4f}" if best_val_loss is not None else "N/A"
             )
 
         st.markdown("---")
@@ -1456,67 +1472,80 @@ elif page == "3D Training Progress":
 
         metrics_table_3d = pd.DataFrame(
             [
-                {
-                    "Metric": "Validation Loss",
-                    "Value": round(metrics_3d.get("Validation loss", 0), 4)
-                },
-                {
-                    "Metric": "Dice Coefficient",
-                    "Value": round(metrics_3d.get("Dice coefficient", 0), 4)
-                },
-                {
-                    "Metric": "Mean IoU",
-                    "Value": round(metrics_3d.get("Mean IoU", 0), 4)
-                },
-                {
-                    "Metric": "Precision",
-                    "Value": round(metrics_3d.get("Precision", 0), 4)
-                },
-                {
-                    "Metric": "Recall / Sensitivity",
-                    "Value": round(metrics_3d.get("Recall / Sensitivity", 0), 4)
-                },
-                {
-                    "Metric": "Threshold",
-                    "Value": metrics_3d.get("Threshold", "N/A")
-                },
-                {
-                    "Metric": "Depth",
-                    "Value": metrics_3d.get("Depth", "N/A")
-                },
-                {
-                    "Metric": "Image Size",
-                    "Value": str(metrics_3d.get("Image size", "N/A"))
-                },
+                {"Metric": "Validation Loss", "Value": round(best_val_loss, 4) if best_val_loss is not None else "N/A"},
+                {"Metric": "Dice Coefficient", "Value": round(metrics_3d.get("Dice coefficient", 0), 4)},
+                {"Metric": "Mean IoU", "Value": round(metrics_3d.get("Mean IoU", 0), 4)},
+                {"Metric": "Precision", "Value": round(metrics_3d.get("Precision", 0), 4)},
+                {"Metric": "Recall / Sensitivity", "Value": round(metrics_3d.get("Recall / Sensitivity", 0), 4)},
+                {"Metric": "Threshold", "Value": metrics_3d.get("Threshold", "N/A")},
+                {"Metric": "Depth", "Value": metrics_3d.get("Depth", "N/A")},
+                {"Metric": "Image Size", "Value": str(metrics_3d.get("Image size", "N/A"))},
             ]
         )
 
-        st.dataframe(
-            metrics_table_3d,
-            use_container_width=True,
-            hide_index=True
-        )
+        st.dataframe(metrics_table_3d, use_container_width=True, hide_index=True)
 
         run_folder = metrics_3d.get("Run folder", None)
         if run_folder is not None:
             st.caption(f"Best model source: {run_folder}")
-
     else:
         st.warning(
             "No 3D metrics found yet. Expected either "
             "best_model_3d/best_metrics_3d.json or latest run metrics."
         )
 
-    if history_3d is not None:
+    if history_3d is not None and not history_3d.empty:
         st.markdown("---")
         st.caption(f"3D history source: {history_source}")
 
-        st.markdown("### 3D Loss During Training")
-        st.line_chart(history_3d.set_index("epoch")[["train_loss", "val_loss"]])
+        loss_columns = [
+            column for column in ["train_loss", "val_loss"]
+            if column in history_3d.columns
+        ]
 
-        st.markdown("### 3D Validation Dice")
-        st.line_chart(history_3d.set_index("epoch")[["val_dice"]])
+        if loss_columns:
+            st.markdown("### 3D Loss During Training")
+            st.line_chart(history_3d.set_index("epoch")[loss_columns])
 
+        if dice_column is not None:
+            st.markdown("### 3D Validation Dice")
+
+            dice_chart_3d = history_3d[["epoch", dice_column]].copy()
+            dice_chart_3d["epoch"] = pd.to_numeric(
+                dice_chart_3d["epoch"],
+                errors="coerce"
+            )
+            dice_chart_3d[dice_column] = pd.to_numeric(
+                dice_chart_3d[dice_column],
+                errors="coerce"
+            )
+            dice_chart_3d = dice_chart_3d.dropna(
+                subset=["epoch", dice_column]
+            ).sort_values("epoch")
+
+            if not dice_chart_3d.empty:
+                dice_chart_3d = dice_chart_3d.rename(
+                    columns={dice_column: "Validation Dice"}
+                )
+
+                st.line_chart(
+                    dice_chart_3d,
+                    x="epoch",
+                    y="Validation Dice"
+                )
+
+                st.caption(
+                    f"Showing {len(dice_chart_3d)} recorded epochs. "
+                    f"Best displayed Dice: "
+                    f"{dice_chart_3d['Validation Dice'].max():.4f}"
+                )
+            else:
+                st.warning(
+                    "The validation Dice column exists, but it contains no "
+                    "numeric values that can be plotted."
+                )
+        else:
+            st.warning("The 3D history file does not contain a validation Dice column.")
     else:
         st.info(
             "No best 3D history file found yet. This is okay if your quick run "
