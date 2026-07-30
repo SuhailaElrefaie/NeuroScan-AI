@@ -74,11 +74,27 @@ def _window_starts(depth: int, window: int = MODEL_DEPTH, stride: int = WINDOW_S
 
 
 def _normalise_like_training(window: np.ndarray) -> np.ndarray:
-    mean = float(window.mean())
-    std = float(window.std())
-    if std < 1e-8:
-        return np.zeros_like(window, dtype=np.float32)
-    return ((window - mean) / std).astype(np.float32)
+    """Match the v2 training pipeline: per-modality z-score on non-zero voxels."""
+    window = np.nan_to_num(np.asarray(window, dtype=np.float32), copy=False)
+    result = np.zeros_like(window, dtype=np.float32)
+
+    for channel in range(window.shape[0]):
+        modality = window[channel]
+        brain = modality != 0
+
+        if not np.any(brain):
+            continue
+
+        values = modality[brain]
+        mean = float(values.mean())
+        std = float(values.std())
+
+        if std < 1e-6:
+            std = 1.0
+
+        result[channel, brain] = (values - mean) / std
+
+    return result
 
 
 def _prepare_window(window: np.ndarray) -> torch.Tensor:
@@ -127,7 +143,16 @@ def predict_full_volume_npz(
     true_mask = _canonicalise_mask(raw_mask, (depth, height, width))
 
     model = UNet3D(in_channels=4, out_channels=1).to(device)
-    model.load_state_dict(torch.load(model_path, map_location=device))
+    try:
+        state_dict = torch.load(
+            model_path,
+            map_location=device,
+            weights_only=True,
+        )
+    except TypeError:
+        state_dict = torch.load(model_path, map_location=device)
+
+    model.load_state_dict(state_dict)
     model.eval()
 
     probability_sum = np.zeros((depth, height, width), dtype=np.float32)
