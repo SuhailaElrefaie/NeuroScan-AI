@@ -6,7 +6,7 @@ import glob
 import numpy as np
 import pandas as pd
 import streamlit as st
-from PIL import Image, ImageFilter
+from PIL import Image
 
 
 from predict import predict_with_gradcam
@@ -34,10 +34,6 @@ BEST_METRICS_3D_PATH = "best_model_3d/best_metrics_3d.json"
 BEST_HISTORY_3D_PATH = "best_model_3d/best_history_3d.csv"
 BEST_MODEL_3D_PATH = "best_model_3d/best_unet3d.pth"
 
-LATEST_3D_RUN_METRICS_PATH = "runs_3d/run_3d_2026_05_14_191516/metrics_3d.json"
-
-DEPTH_3D = 32
-IMAGE_SIZE_3D = (160, 160)
 
 SAMPLE_2D_DIR = "sample_data/2d"
 SAMPLE_3D_DIR = "sample_data/3d"
@@ -88,35 +84,6 @@ def read_file_bytes(path):
         return file.read()
 
 
-def render_sample_downloads(folder, extensions, title, help_text, mime_type):
-    sample_files = get_sample_files(folder, extensions)
-
-    with st.expander(title, expanded=False):
-        st.caption(help_text)
-
-        if len(sample_files) == 0:
-            st.warning(
-                f"No sample files found in `{folder}`. Run `python make_public_samples.py` locally, "
-                "then commit and push the generated `sample_data` folder."
-            )
-            return
-
-        columns = st.columns(min(5, len(sample_files)))
-
-        for index, path in enumerate(sample_files[:5]):
-            file_name = os.path.basename(path)
-            extension = os.path.splitext(path)[1].lower()
-
-            with columns[index % len(columns)]:
-                st.download_button(
-                    label=f"⬇️ Download {index + 1}",
-                    data=read_file_bytes(path),
-                    file_name=file_name,
-                    mime=mime_type,
-                    use_container_width=True
-                )
-
-
 def render_sample_folder_sidebar(folder, extensions, title, help_text, mime_type):
     """Small sample-download folder shown in the analysis sidebar."""
     sample_files = get_sample_files(folder, extensions)
@@ -126,8 +93,8 @@ def render_sample_folder_sidebar(folder, extensions, title, help_text, mime_type
 
         if len(sample_files) == 0:
             st.warning(
-                f"No sample files found in `{folder}`. Run `python make_public_samples.py`, "
-                "then commit and push the generated `sample_data` folder."
+                f"No sample files found in `{folder}`. Restore the tracked files inside "
+                "`sample_data/2d` or `sample_data/3d`."
             )
             return
 
@@ -286,76 +253,6 @@ def resize_for_display(image, width=384, resample=None):
     return image.resize((width, new_h), resample=resample)
 
 
-def smooth_mask_for_display(mask_img, width=384, threshold=96, blur_radius=0.6):
-    """
-    Display-only smoothing for coarse 3D masks.
-
-    The model prediction stays unchanged. This only upscales the binary mask more
-    gracefully so the displayed tumor region does not look like large blocks.
-    """
-    if mask_img is None:
-        return None
-
-    if not isinstance(mask_img, Image.Image):
-        mask_img = Image.fromarray(mask_img)
-
-    mask_img = mask_img.convert("L")
-    w, h = mask_img.size
-    new_h = max(1, int(h * (width / w)))
-
-    # LANCZOS creates an anti-aliased high-resolution mask instead of square blocks.
-    mask_large = mask_img.resize((width, new_h), resample=Image.Resampling.LANCZOS)
-
-    if blur_radius and blur_radius > 0:
-        mask_large = mask_large.filter(ImageFilter.GaussianBlur(radius=blur_radius))
-
-    # Re-threshold after smoothing so the mask remains clean and binary-looking.
-    mask_arr = np.asarray(mask_large, dtype=np.uint8)
-    mask_arr = np.where(mask_arr >= threshold, 255, 0).astype(np.uint8)
-
-    return Image.fromarray(mask_arr)
-
-
-def create_smooth_overlay_for_display(input_img, mask_img, width=384, overlay_alpha=0.28, blur_radius=1.1):
-    """
-    Create a cleaner display overlay from the original MRI slice and mask.
-
-    This blends a soft red mask at display resolution instead of first painting
-    a low-resolution mask and then stretching it with visible blocks.
-    """
-    if input_img is None or mask_img is None:
-        return None
-
-    if not isinstance(input_img, Image.Image):
-        input_img = Image.fromarray(input_img)
-    if not isinstance(mask_img, Image.Image):
-        mask_img = Image.fromarray(mask_img)
-
-    input_img = input_img.convert("L")
-    mask_img = mask_img.convert("L")
-
-    w, h = input_img.size
-    new_h = max(1, int(h * (width / w)))
-
-    mri_large = input_img.resize((width, new_h), resample=Image.Resampling.LANCZOS)
-    mask_soft = mask_img.resize((width, new_h), resample=Image.Resampling.LANCZOS)
-
-    if blur_radius and blur_radius > 0:
-        mask_soft = mask_soft.filter(ImageFilter.GaussianBlur(radius=blur_radius))
-
-    base = np.stack([np.asarray(mri_large, dtype=np.float32)] * 3, axis=-1)
-    red = np.zeros_like(base)
-    red[:, :, 0] = 255.0
-
-    alpha = (np.asarray(mask_soft, dtype=np.float32) / 255.0) * overlay_alpha
-    alpha = alpha[..., None]
-
-    overlay = base * (1.0 - alpha) + red * alpha
-    overlay = np.clip(overlay, 0, 255).astype(np.uint8)
-
-    return Image.fromarray(overlay)
-
-
 def create_3d_overlay(image_slice, mask_slice, overlay_alpha=0.35):
     image_uint8 = normalize_slice_for_display(image_slice)
     image_rgb = np.stack([image_uint8] * 3, axis=-1)
@@ -423,18 +320,6 @@ def get_representative_3d_indices(mask_3d):
     return z_index, y_index, x_index
 
 
-def predict_3d_volume(volume_index=0, threshold=0.5):
-    from predict_3d import predict_3d_volume as run_predict_3d
-
-    result = run_predict_3d(
-        volume_index=int(volume_index),
-        threshold=threshold
-    )
-
-    result["source_type"] = "demo"
-    return result
-
-
 def get_device_3d():
     import torch
 
@@ -448,23 +333,18 @@ def get_device_3d():
 
 
 def get_3d_model_path():
-    latest_run_model = find_latest_file("runs_3d/run_3d_*/model_3d.pth")
-
+    """Return the deployed 3D model only; do not silently load legacy runs."""
     if os.path.exists(BEST_MODEL_3D_PATH):
         return BEST_MODEL_3D_PATH
-
-    if latest_run_model is not None:
-        return latest_run_model
-
     return None
 
 
-def predict_uploaded_3d_npz(uploaded_file, threshold=0.5):
+def predict_uploaded_3d_npz(uploaded_file, threshold=0.55):
     model_path = get_3d_model_path()
     if model_path is None:
         raise FileNotFoundError(
-            "No 3D model found. Expected best_model_3d/best_unet3d.pth "
-            "or a model_3d.pth inside runs_3d."
+            "No deployed 3D model found. Expected "
+            "best_model_3d/best_unet3d.pth."
         )
 
     return predict_full_volume_npz(
@@ -1012,6 +892,7 @@ elif page == "3D Info":
     This section is for volume-based MRI tumor segmentation.
 
     - **Analysis:** download a sample `.npz` file or upload your own 3D MRI volume
+    - **Ground truth:** shown only when the uploaded NPZ already contains a compatible `mask` array
     - **Training:** view the saved 3D model performance and training curves
     """)
 
@@ -1140,8 +1021,7 @@ elif page == "3D MRI Analysis":
 
     if uploaded_3d_file:
         upload_signature = (
-            f"{uploaded_3d_file.name}_{uploaded_3d_file.size}_"
-            f"{threshold_3d}_{overlay_alpha_3d}_{modality_index}"
+            f"{uploaded_3d_file.name}_{uploaded_3d_file.size}_{threshold_3d}"
         )
 
         if st.session_state.get("last_3d_upload_signature") != upload_signature:
@@ -1287,7 +1167,6 @@ elif page == "3D MRI Analysis":
         if true_voxels is not None:
             with m3:
                 st.metric("Ground Truth Tumor Voxels", true_voxels)
-
 
 
         st.markdown("---")

@@ -22,7 +22,7 @@ MODEL_HEIGHT = 160
 MODEL_WIDTH = 160
 WINDOW_STRIDE = 16
 
-# The AWSAF BraTS H5 dataset stores its four image channels in this order.
+# The project BraTS conversion stores its four MRI channels in this order.
 MODALITY_NAMES = {
     0: "FLAIR",
     1: "T1",
@@ -130,7 +130,7 @@ def predict_full_volume_npz(
     uploaded_file: Union[str, Path, BinaryIO],
     model_path: str,
     device: torch.device,
-    threshold: float = 0.5,
+    threshold: float = 0.55,
 ) -> Dict[str, object]:
     """Predict either an old 32-slice sample or a complete patient volume."""
     with np.load(uploaded_file, allow_pickle=False) as data:

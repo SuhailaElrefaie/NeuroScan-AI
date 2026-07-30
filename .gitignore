@@ -1,7 +1,10 @@
 # Python
 __pycache__/
-*.pyc
+*.py[cod]
+*.egg-info/
+.pytest_cache/
 .venv/
+venv/
 venv_meta/
 
 # Mac / IDE
@@ -9,33 +12,39 @@ venv_meta/
 .idea/
 .vscode/
 
-# Temporary files
+# Temporary and local files
 temp_upload.png
 test_user_3d_upload.npz
-train3d_local_log.txt
 *.log
+*.backup
+*.zip
+channels.png
+ui.py.backup
 
-# Large datasets - do not upload to GitHub
+# Large datasets - never upload
 Data/
 archive/
 *.h5
 *.npz
 
-# Training outputs
+# Training outputs and local backups
 runs/
 runs_3d/
+runs_3d_v2/
+best_model_3d_v2/
 backups/
 
-# Extra helper/local files
+# One-off local utilities
 audit_project.py
 count_data.py
 newest_ui.py
 training_history.csv
 best_unet.pth
 
-# Keep small public website samples
+# Keep the small public website samples
 !sample_data/
 !sample_data/2d/
 !sample_data/2d/*
 !sample_data/3d/
 !sample_data/3d/*.npz
+!sample_data/3d/*.csv

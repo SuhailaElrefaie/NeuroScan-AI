@@ -7,3 +7,4 @@ pillow
 opencv-python-headless
 plotly
 h5py
+nibabel
