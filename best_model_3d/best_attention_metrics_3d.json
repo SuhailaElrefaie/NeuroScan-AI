@@ -1,0 +1,24 @@
+{
+  "Dice coefficient": 0.9275542236471951,
+  "Mean IoU": 0.8648961505556393,
+  "Precision": 0.9400059442969748,
+  "Recall / Sensitivity": 0.9154280720024058,
+  "Threshold": 0.55,
+  "Epoch": 26,
+  "Validation loss": 0.10641839012422206,
+  "Depth": 32,
+  "Image size": [
+    160,
+    160
+  ],
+  "Train patients": 1001,
+  "Validation patients": 250,
+  "Total patients": 1251,
+  "Architecture": "Deeper residual 3D U-Net with bottleneck multi-head attention",
+  "Attention heads": 8,
+  "Base channels": 16,
+  "Parameters": 6268801,
+  "Normalization": "per-modality non-zero z-score",
+  "Validation": "patient-level split with per-patient overlapping-window merge",
+  "Run folder": "runs_3d_attention/run_attention_3d_2026_08_05_200000"
+}
