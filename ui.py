@@ -30,9 +30,9 @@ st.set_page_config(
 BEST_METRICS_PATH = "best_model/best_metrics.json"
 BEST_HISTORY_PATH = "best_model/best_history.csv"
 
-BEST_METRICS_3D_PATH = "best_model_3d/best_metrics_3d.json"
-BEST_HISTORY_3D_PATH = "best_model_3d/best_history_3d.csv"
-BEST_MODEL_3D_PATH = "best_model_3d/best_unet3d.pth"
+BEST_METRICS_3D_PATH = "best_model_3d/best_attention_metrics_3d.json"
+BEST_HISTORY_3D_PATH = "best_model_3d/best_attention_history_3d.csv"
+BEST_MODEL_3D_PATH = "best_model_3d/best_attention_unet3d.pth"
 
 
 SAMPLE_2D_DIR = "sample_data/2d"
@@ -344,7 +344,7 @@ def predict_uploaded_3d_npz(uploaded_file, threshold=0.55):
     if model_path is None:
         raise FileNotFoundError(
             "No deployed 3D model found. Expected "
-            "best_model_3d/best_unet3d.pth."
+            "best_model_3d/best_attention_unet3d.pth."
         )
 
     return predict_full_volume_npz(
@@ -1170,10 +1170,11 @@ elif page == "3D MRI Analysis":
 
 
         st.markdown("---")
-        st.markdown("### Interactive Full-Volume 3D View")
+        st.markdown("### Interactive MRI Surface View")
         st.caption(
             "Drag to rotate, scroll to zoom, and double-click to reset. "
-            "Grey shows MRI anatomy and red shows the model's predicted tumour."
+            "The transparent grey triangle mesh is the MRI brain surface, and the red mesh "
+            "is the predicted tumour surface. Surface smoothing affects display only."
         )
         figure_3d = build_tumor_figure(result, modality_index=modality_index)
         st.plotly_chart(figure_3d, use_container_width=True)
