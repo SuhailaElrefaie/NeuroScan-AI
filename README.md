@@ -293,17 +293,4 @@ python3 tools/verify_project.py
 
 ---
 
-## Limitations
-
-- NeuroScan AI is an academic prototype and is not a medical device.
-- It must not be used for diagnosis or clinical decision-making.
-- The 3D task performs binary whole-tumour segmentation rather than separate BraTS tumour subregions.
-- Validation results are internal project results and have not been externally validated on an independent clinical cohort.
-
----
-
-## Author
-
-Developed for the **Individual Software Project, Charles University**.
-
 Supervisor: **Kassem Anis**
