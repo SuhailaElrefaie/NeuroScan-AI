@@ -253,165 +253,241 @@ def predict_full_volume_npz(
     }
 
 
-def _downsample(
-    volume: np.ndarray,
-    max_depth: int = 52,
-    max_side: int = 64,
-) -> np.ndarray:
-    """Fast display-only downsampling. Does not affect model inference."""
-    d, h, w = volume.shape
-    sd = max(1, int(np.ceil(d / max_depth)))
-    sh = max(1, int(np.ceil(h / max_side)))
-    sw = max(1, int(np.ceil(w / max_side)))
-    return volume[::sd, ::sh, ::sw]
+
+from scipy import ndimage as ndi
 
 
-def _display_normalise(volume: np.ndarray) -> np.ndarray:
-    """Contrast-normalise MRI anatomy while keeping true background at zero."""
-    volume = np.nan_to_num(np.asarray(volume, dtype=np.float32))
-    nonzero = volume[np.abs(volume) > 1e-8]
-    if nonzero.size == 0:
-        return np.zeros_like(volume)
+def _estimate_background(modality: np.ndarray) -> float:
+    """Estimate the scanner/background value from the outer shell.
 
-    low, high = np.percentile(nonzero, (3.0, 99.5))
-    if high - low < 1e-8:
-        return np.zeros_like(volume)
+    BraTS sample NPZ files in this project are already normalized and their
+    background is a constant negative value, not zero. Using ``volume != 0``
+    therefore incorrectly marks the whole cuboid as anatomy.
+    """
+    v = np.asarray(modality, dtype=np.float32)
+    n = 3
+    shell = np.concatenate([
+        v[:n].ravel(), v[-n:].ravel(),
+        v[:, :n].ravel(), v[:, -n:].ravel(),
+        v[:, :, :n].ravel(), v[:, :, -n:].ravel(),
+    ])
+    return float(np.median(shell))
 
-    normalised = np.clip((volume - low) / (high - low), 0.0, 1.0)
-    normalised[np.abs(volume) <= 1e-8] = 0.0
-    return normalised.astype(np.float32)
+
+def _brain_mask_from_mri(image_4d: np.ndarray) -> np.ndarray:
+    """Recover the real BraTS brain support from all four modalities.
+
+    A voxel is anatomy when it differs from the modality-specific background.
+    All four modalities in the exported project samples share the same support,
+    so a majority vote is used as a guard against a noisy channel.
+    """
+    image = np.asarray(image_4d, dtype=np.float32)
+    votes = np.zeros(image.shape[1:], dtype=np.uint8)
+
+    for c in range(image.shape[0]):
+        m = image[c]
+        bg = _estimate_background(m)
+        dynamic = max(float(m.max() - m.min()), 1.0)
+        tolerance = max(1e-5, dynamic * 1e-5)
+        votes += (np.abs(m - bg) > tolerance).astype(np.uint8)
+
+    required = max(1, int(np.ceil(image.shape[0] / 2)))
+    mask = votes >= required
+
+    # Keep the main 3-D anatomical object, close small cracks and fill cavities
+    # so marching cubes extracts the external brain boundary rather than noise.
+    labels, count = ndi.label(mask)
+    if count > 1:
+        sizes = ndi.sum(mask, labels, index=np.arange(1, count + 1))
+        keep = int(np.argmax(sizes)) + 1
+        mask = labels == keep
+
+    structure = ndi.generate_binary_structure(3, 1)
+    mask = ndi.binary_closing(mask, structure=structure, iterations=1)
+    mask = ndi.binary_fill_holes(mask)
+    return mask.astype(bool)
 
 
-def _resize_probability_for_mesh(
-    probability: np.ndarray,
-    target_shape: Tuple[int, int, int],
-) -> np.ndarray:
-    """Trilinear display-only resize gives marching cubes a smoother field."""
-    tensor = torch.from_numpy(
-        np.asarray(probability, dtype=np.float32)
-    ).unsqueeze(0).unsqueeze(0)
-    resized = F.interpolate(
-        tensor,
-        size=target_shape,
-        mode="trilinear",
-        align_corners=False,
+def _brain_bbox(mask: np.ndarray, pad: int = 5) -> Tuple[slice, slice, slice]:
+    coords = np.argwhere(mask)
+    if coords.size == 0:
+        raise ValueError('No brain anatomy could be extracted from the MRI volume.')
+    lo = np.maximum(coords.min(axis=0) - pad, 0)
+    hi = np.minimum(coords.max(axis=0) + pad + 1, np.array(mask.shape))
+    return tuple(slice(int(lo[i]), int(hi[i])) for i in range(3))
+
+
+def _resize_display_volume(volume: np.ndarray, max_shape=(105, 128, 128), order: int = 1) -> np.ndarray:
+    """Resize a cropped display volume while preserving its aspect ratio."""
+    shape = np.array(volume.shape, dtype=float)
+    target = np.array(max_shape, dtype=float)
+    scale = min(1.0, float(np.min(target / shape)))
+    if scale >= 0.999:
+        return np.asarray(volume)
+    return ndi.zoom(np.asarray(volume), zoom=(scale, scale, scale), order=order)
+
+
+def _normalise_mri_for_surface(modality: np.ndarray, brain_mask: np.ndarray) -> np.ndarray:
+    """Map real in-brain MRI intensities to 0..1 for grey vertex shading."""
+    m = np.asarray(modality, dtype=np.float32)
+    vals = m[brain_mask]
+    if vals.size == 0:
+        return np.zeros_like(m)
+    lo, hi = np.percentile(vals, (3.0, 99.0))
+    if hi <= lo + 1e-8:
+        return np.zeros_like(m)
+    out = np.clip((m - lo) / (hi - lo), 0.0, 1.0)
+    out[~brain_mask] = 0.0
+    return out.astype(np.float32)
+
+
+def _surface_from_binary(mask: np.ndarray, sigma: float = 1.15):
+    """Create a smooth closed triangular surface from a binary 3-D mask."""
+    field = ndi.gaussian_filter(mask.astype(np.float32), sigma=sigma)
+    # Zero padding guarantees a closed surface even when anatomy touches the
+    # first/last acquired MRI slice.
+    field = np.pad(field, 2, mode='constant', constant_values=0.0)
+    if not (field.min() < 0.5 < field.max()):
+        raise ValueError('The extracted anatomy does not contain a usable surface.')
+    vertices, faces, normals, values = marching_cubes(
+        field, level=0.5, allow_degenerate=False
     )
-    return resized.squeeze(0).squeeze(0).numpy()
+    vertices -= 2.0
+    return vertices, faces
+
+
+def _sample_vertex_intensity(intensity: np.ndarray, vertices: np.ndarray) -> np.ndarray:
+    z = np.clip(np.rint(vertices[:, 0]).astype(int), 0, intensity.shape[0] - 1)
+    y = np.clip(np.rint(vertices[:, 1]).astype(int), 0, intensity.shape[1] - 1)
+    x = np.clip(np.rint(vertices[:, 2]).astype(int), 0, intensity.shape[2] - 1)
+    return intensity[z, y, x]
+
+
+def _add_brain_surface(
+    figure: go.Figure,
+    image_4d: np.ndarray,
+    modality_index: int,
+):
+    brain_full = _brain_mask_from_mri(image_4d)
+    bbox = _brain_bbox(brain_full, pad=4)
+
+    brain = brain_full[bbox]
+    modality = np.asarray(image_4d[int(modality_index)], dtype=np.float32)[bbox]
+    intensity = _normalise_mri_for_surface(modality, brain)
+
+    brain_small = _resize_display_volume(brain.astype(np.float32), order=1)
+    brain_small = brain_small > 0.45
+    intensity_small = _resize_display_volume(intensity, order=1)
+
+    vertices, faces = _surface_from_binary(brain_small, sigma=1.05)
+    vertex_values = _sample_vertex_intensity(intensity_small, vertices)
+
+    figure.add_trace(go.Mesh3d(
+        x=vertices[:, 2], y=vertices[:, 1], z=vertices[:, 0],
+        i=faces[:, 0], j=faces[:, 1], k=faces[:, 2],
+        intensity=vertex_values,
+        intensitymode='vertex',
+        colorscale=[
+            [0.0, 'rgb(72,72,76)'],
+            [0.35, 'rgb(112,112,118)'],
+            [0.7, 'rgb(165,165,170)'],
+            [1.0, 'rgb(215,215,218)'],
+        ],
+        cmin=0.0, cmax=1.0,
+        showscale=False,
+        opacity=0.24,
+        name=f'MRI brain surface ({MODALITY_NAMES.get(int(modality_index), "MRI")})',
+        flatshading=False,
+        lighting=dict(ambient=0.42, diffuse=0.72, specular=0.18, roughness=0.68, fresnel=0.08),
+        lightposition=dict(x=180, y=220, z=260),
+        hoverinfo='skip',
+    ))
+
+    return bbox, brain.shape, brain_small.shape
+
+
+def _crop_and_resize_probability(
+    probability: np.ndarray,
+    bbox: Tuple[slice, slice, slice],
+    final_shape: Tuple[int, int, int],
+) -> np.ndarray:
+    p = np.asarray(probability, dtype=np.float32)[bbox]
+    zoom = np.array(final_shape, dtype=float) / np.array(p.shape, dtype=float)
+    return ndi.zoom(p, zoom=zoom, order=1)
 
 
 def _add_tumour_surface(
     figure: go.Figure,
     probability: np.ndarray,
+    bbox: Tuple[slice, slice, slice],
     target_shape: Tuple[int, int, int],
     threshold: float,
 ) -> None:
-    """Extract the predicted tumour boundary as a triangular surface mesh."""
-    probability_small = _resize_probability_for_mesh(probability, target_shape)
-
-    minimum = float(probability_small.min())
-    maximum = float(probability_small.max())
-    level = float(threshold)
-    if not (minimum < level < maximum):
+    p = _crop_and_resize_probability(probability, bbox, target_shape)
+    if not (float(p.min()) < threshold < float(p.max())):
         return
 
+    # A small amount of display-only smoothing removes stair-step voxel edges.
+    p = ndi.gaussian_filter(p, sigma=0.55)
+    if not (float(p.min()) < threshold < float(p.max())):
+        return
+
+    padded = np.pad(p, 2, mode='constant', constant_values=0.0)
     vertices, faces, _, _ = marching_cubes(
-        probability_small,
-        level=level,
-        allow_degenerate=False,
+        padded, level=float(threshold), allow_degenerate=False
     )
+    vertices -= 2.0
 
-    # skimage vertices are returned as (z, y, x).
-    z = vertices[:, 0]
-    y = vertices[:, 1]
-    x = vertices[:, 2]
-
-    figure.add_trace(
-        go.Mesh3d(
-            x=x,
-            y=y,
-            z=z,
-            i=faces[:, 0],
-            j=faces[:, 1],
-            k=faces[:, 2],
-            color="rgb(235,55,65)",
-            opacity=0.95,
-            name="Predicted tumour surface",
-            flatshading=False,
-            lighting=dict(
-                ambient=0.35,
-                diffuse=0.75,
-                specular=0.25,
-                roughness=0.55,
-                fresnel=0.10,
-            ),
-            lightposition=dict(x=120, y=160, z=220),
-            hoverinfo="skip",
-        )
-    )
+    figure.add_trace(go.Mesh3d(
+        x=vertices[:, 2], y=vertices[:, 1], z=vertices[:, 0],
+        i=faces[:, 0], j=faces[:, 1], k=faces[:, 2],
+        color='rgb(245,45,58)',
+        opacity=0.97,
+        name='Predicted tumour surface',
+        flatshading=False,
+        lighting=dict(ambient=0.35, diffuse=0.78, specular=0.30, roughness=0.48, fresnel=0.10),
+        lightposition=dict(x=180, y=220, z=260),
+        hoverinfo='skip',
+    ))
 
 
 def build_tumor_figure(
     result: Dict[str, object],
     modality_index: int = 0,
 ) -> go.Figure:
-    """Hybrid view: grey MRI volume + smooth predicted tumour surface."""
-    image = np.asarray(result["image"])[int(modality_index)]
-    probability = np.asarray(result["probability"], dtype=np.float32)
-    threshold = float(result.get("threshold", 0.55))
+    """True MRI-derived brain surface + predicted tumour surface.
 
-    image_small = _display_normalise(_downsample(image))
-    d, h, w = image_small.shape
-    z, y, x = np.mgrid[0:d, 0:h, 0:w]
+    No point cloud, no Plotly Volume cuboid and no slice-plane cross. The brain
+    boundary is recovered from the actual BraTS background value stored in the
+    uploaded NPZ and rendered as a smooth triangular mesh.
+    """
+    image_4d = _canonicalise_image(np.asarray(result['image']))
+    probability = np.asarray(result['probability'], dtype=np.float32)
+    threshold = float(result.get('threshold', 0.55))
 
     figure = go.Figure()
-
-    # Grey MRI anatomy. Multiple translucent intensity surfaces preserve the
-    # voxel/volume appearance while giving a recognisable full brain context.
-    figure.add_trace(
-        go.Volume(
-            x=x.flatten(),
-            y=y.flatten(),
-            z=z.flatten(),
-            value=image_small.flatten(),
-            isomin=0.08,
-            isomax=0.92,
-            opacity=0.075,
-            surface_count=12,
-            colorscale="Greys",
-            reversescale=False,
-            showscale=False,
-            name=f"MRI anatomy ({MODALITY_NAMES.get(int(modality_index), 'MRI')})",
-            caps=dict(x_show=False, y_show=False, z_show=False),
-            hoverinfo="skip",
-        )
+    bbox, _crop_shape, display_shape = _add_brain_surface(
+        figure, image_4d, int(modality_index)
     )
-
     _add_tumour_surface(
-        figure=figure,
-        probability=probability,
-        target_shape=(d, h, w),
-        threshold=threshold,
+        figure, probability, bbox, display_shape, threshold
     )
 
     figure.update_layout(
-        height=650,
-        margin=dict(l=0, r=0, t=48, b=0),
-        title="3D MRI volume with predicted tumour surface",
+        height=680,
+        margin=dict(l=0, r=0, t=46, b=0),
+        title='MRI-derived brain surface with predicted tumour',
         scene=dict(
             xaxis_visible=False,
             yaxis_visible=False,
             zaxis_visible=False,
-            aspectmode="data",
-            camera=dict(eye=dict(x=1.55, y=1.55, z=1.10)),
-            bgcolor="rgba(0,0,0,0)",
+            aspectmode='data',
+            camera=dict(eye=dict(x=1.50, y=1.35, z=1.05)),
+            bgcolor='rgb(13,15,20)',
         ),
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-        legend=dict(
-            orientation="h",
-            y=1.02,
-            x=0.5,
-            xanchor="center",
-        ),
+        paper_bgcolor='rgb(13,15,20)',
+        plot_bgcolor='rgb(13,15,20)',
+        font=dict(color='white'),
+        legend=dict(orientation='h', y=1.02, x=0.5, xanchor='center'),
     )
     return figure

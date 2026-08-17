@@ -48,3 +48,16 @@ best_unet.pth
 !sample_data/3d/
 !sample_data/3d/*.npz
 !sample_data/3d/*.csv
+# Local rendering tests / patch backups
+brain_surface*.html
+surface_renderer*.html
+full_volume_3d.before_surface_*.py
+full_volume_3d.*FIX*.py
+*.patch
+*.rej
+*.orig
+
+# Attention dataset local index/cache
+.attention_volume_index.json
+attention_bad_h5_files.txt
+runs_3d_attention/
