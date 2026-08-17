@@ -62,13 +62,6 @@ Validation split: 20%
 Threshold:        0.30
 ```
 
-Training uses:
-
-- Adam optimizer
-- weighted Binary Cross-Entropy loss
-- Dice loss
-- training augmentation
-- validation Dice for model selection
 
 ### Saved 2D results
 
@@ -169,19 +162,6 @@ Maximum epochs:           80
 Learning rate:            2e-4
 ```
 
-Training uses:
-
-- patient-level train/validation splitting
-- tumour-aware 3D window sampling
-- per-modality MRI normalisation
-- 3D augmentation
-- AdamW optimizer
-- weighted BCE + Dice loss
-- mixed-precision CUDA training
-- gradient clipping
-- learning-rate reduction
-- early stopping
-- validation threshold tuning
 
 ### Saved 3D results
 
