@@ -290,7 +290,3 @@ python3 tools/verify_project.py
 - scikit-image
 - SciPy
 - Git / GitHub
-
----
-
-Supervisor: **Kassem Anis**
