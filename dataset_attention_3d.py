@@ -1,10 +1,3 @@
-"""Patient-level BraTS H5 loading for the attention 3D U-Net.
-
-The loader is independent from the linked neuro-voxel repository and is tailored
-to NeuroScan AI's converted files:
-    volume_<patient>_slice_<index>.h5
-Each file must contain `image` and `mask` datasets.
-"""
 from __future__ import annotations
 
 import json
