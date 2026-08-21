@@ -493,7 +493,6 @@ def read_file_bytes(path):
 
 
 def render_sample_folder_sidebar(folder, extensions, title, help_text, mime_type):
-    """Small sample-download folder shown in the analysis sidebar."""
     sample_files = get_sample_files(folder, extensions)
 
     with st.sidebar.expander(title, expanded=False):
@@ -520,7 +519,6 @@ def render_sample_folder_sidebar(folder, extensions, title, help_text, mime_type
 
 
 def render_export_2d_sidebar():
-    """Export buttons for the latest 2D prediction. Rendered after prediction so it updates immediately."""
     with st.sidebar.expander("Export 2D Results", expanded=False):
         if "export_2d" not in st.session_state:
             st.caption("Upload a 2D image first to export results.")
@@ -557,7 +555,6 @@ def render_export_2d_sidebar():
 
 
 def render_export_3d_sidebar():
-    """Export buttons for the latest selected 3D slice. Rendered after prediction so it updates immediately."""
     with st.sidebar.expander("Export 3D Slice Results", expanded=False):
         if "export_3d" not in st.session_state:
             st.caption("Upload a 3D volume first to export results.")
@@ -610,6 +607,15 @@ def render_export_3d_sidebar():
             use_container_width=True,
             key="export_3d_probability"
         )
+        if "gradcam_overlay" in export_3d:
+            st.download_button(
+                label="Grad-CAM Overlay",
+                data=export_3d["gradcam_overlay"],
+                file_name=export_3d["gradcam_name"],
+                mime="image/png",
+                use_container_width=True,
+                key="export_3d_gradcam"
+            )
 
 
 def image_to_png_bytes(image):
@@ -1542,6 +1548,15 @@ elif page == "3D MRI Analysis":
                         selected_slice=slice_index,
                         modality_index=modality_index,
                         heatmap_alpha=0.42,
+                    )
+                    gradcam_result = st.session_state["gradcam_3d"]
+
+                    st.session_state["export_3d"]["gradcam_overlay"] = image_to_png_bytes(
+                        Image.fromarray(gradcam_result["overlay_rgb"])
+                    )
+                    
+                    st.session_state["export_3d"]["gradcam_name"] = (
+                        f"3d_volume_{result['volume_id']}_slice_{slice_index}_gradcam_overlay.png"
                     )
                     st.session_state["gradcam_3d_key"] = gradcam_key
 
