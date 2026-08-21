@@ -1420,25 +1420,6 @@ elif page == "3D MRI Analysis":
     if "result_3d" in st.session_state:
         result = st.session_state["result_3d"]
 
-        with st.expander(
-            "🧠 Three-view MRI Viewer · Axial / Coronal / Sagittal",
-            expanded=False,
-        ):
-            st.caption(
-                "Open this section to inspect the MRI from three anatomical "
-                "directions with the predicted tumor overlaid in red."
-            )
-
-            orthogonal_figure = build_orthogonal_mri_figure(
-                result,
-                modality_index=modality_index,
-            )
-
-            st.plotly_chart(
-                orthogonal_figure,
-                use_container_width=True,
-            )
-
         suggested_slice, _, _ = get_representative_3d_indices(result["pred_mask"])
 
         st.markdown("### 3D Slice Explorer")
