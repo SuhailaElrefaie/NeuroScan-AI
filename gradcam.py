@@ -6,8 +6,6 @@ from PIL import Image
 
 
 class GradCAM:
-    """Grad-CAM helper for both 2D and 3D segmentation models."""
-
     def __init__(self, model, target_layer):
         self.model = model
         self.target_layer = target_layer
@@ -88,8 +86,6 @@ class GradCAM:
 
 
 def create_gradcam_overlay(image_pil, cam, heatmap_alpha=0.40):
-    """Create the same colored JET Grad-CAM style used by the 2D workflow."""
-
     if not isinstance(image_pil, Image.Image):
         image_pil = Image.fromarray(np.asarray(image_pil))
 
