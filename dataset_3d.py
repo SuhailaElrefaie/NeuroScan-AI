@@ -113,18 +113,6 @@ def normalize_modalities_nonzero(image: np.ndarray) -> np.ndarray:
 
 
 class BraTSWindowDataset(Dataset):
-    """
-    Efficient patch dataset for converted BraTS H5 slices.
-
-    Training:
-      - multiple windows per patient each epoch
-      - mostly tumour-containing windows, plus random background/context windows
-
-    Validation:
-      - deterministic overlapping windows covering the complete patient depth
-      - gives a much more honest validation score than tumour-only validation
-    """
-
     def __init__(
         self,
         h5_dir: str | Path,
@@ -249,7 +237,6 @@ class BraTSWindowDataset(Dataset):
         image_volume = np.stack(images, axis=1)  # [C, D, H, W]
         mask_volume = np.stack(masks, axis=0)[None]  # [1, D, H, W]
 
-        # Pad at end when a patient has fewer slices than requested depth.
         pad_depth = self.depth - image_volume.shape[1]
         if pad_depth > 0:
             image_volume = np.pad(
@@ -288,12 +275,10 @@ class BraTSWindowDataset(Dataset):
         mask: torch.Tensor,
         rng: random.Random,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        # Left-right flip is anatomically reasonable for this binary segmentation task.
         if rng.random() < 0.5:
             image = torch.flip(image, dims=[3])
             mask = torch.flip(mask, dims=[3])
 
-        # Mild intensity augmentation; applied independently per channel.
         for channel in range(image.shape[0]):
             if rng.random() < 0.35:
                 scale = rng.uniform(0.90, 1.10)
@@ -307,7 +292,6 @@ class BraTSWindowDataset(Dataset):
         return image, mask
 
     def __getitem__(self, index: int) -> Tuple[torch.Tensor, torch.Tensor]:
-        # Worker-aware changing seed so training windows vary across epochs/workers.
         worker = torch.utils.data.get_worker_info()
         worker_seed = worker.seed if worker is not None else torch.initial_seed()
         rng = random.Random(worker_seed + index * 1009)
