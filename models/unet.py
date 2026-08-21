@@ -2,22 +2,6 @@ import torch
 import torch.nn as nn
 
 class DoubleConv(nn.Module):
-    """
-    A repeated convolution block used throughout the U-Net model.
-
-    The block applies:
-    1. Convolution
-    2. Batch normalization
-    3. ReLU activation
-    4. A second convolution
-    5. Batch normalization
-    6. ReLU activation
-
-    Args:
-        in_channels: Number of input feature channels.
-        out_channels: Number of output feature channels.
-    """
-
     def __init__(self, in_channels, out_channels):
         super().__init__()
 
@@ -32,31 +16,10 @@ class DoubleConv(nn.Module):
         )
 
     def forward(self, x):
-        """
-        Pass input data through the double convolution block.
-
-        Args:
-            x: Input tensor.
-
-        Returns:
-            Tensor after two convolution layers.
-        """
         return self.layers(x)
 
 
 class UNet(nn.Module):
-    """
-    U-Net architecture for binary brain tumor segmentation.
-
-    The encoder reduces the spatial size of the image while learning deeper
-    features. The decoder restores the original size and combines decoder
-    features with encoder features using skip connections.
-
-    Args:
-        in_channels: Number of image input channels. Default is 1 for grayscale MRI.
-        out_channels: Number of output channels. Default is 1 for binary segmentation.
-    """
-
     def __init__(self, in_channels=1, out_channels=1):
         super().__init__()
 
@@ -87,16 +50,6 @@ class UNet(nn.Module):
         self.final = nn.Conv2d(32, out_channels, kernel_size=1)
 
     def forward(self, x):
-        """
-        Perform the forward pass of the U-Net model.
-
-        Args:
-            x: Input MRI tensor of shape [batch, channels, height, width].
-
-        Returns:
-            Raw segmentation output before sigmoid activation.
-        """
-
         # Encoder
         e1 = self.enc1(x)
         e2 = self.enc2(self.pool1(e1))
