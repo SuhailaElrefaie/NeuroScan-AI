@@ -29,7 +29,6 @@ class Config:
     seed: int = 42
     val_fraction: float = 0.20
 
-    # Kept compatible with the current app/full-volume sliding inference.
     depth: int = 32
     image_height: int = 160
     image_width: int = 160
