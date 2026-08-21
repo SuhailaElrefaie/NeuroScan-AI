@@ -6,6 +6,9 @@ import glob
 import numpy as np
 import pandas as pd
 import streamlit as st
+import plotly.graph_objects as go
+from scipy import ndimage as ndi
+from skimage.measure import marching_cubes
 from PIL import Image
 
 
@@ -18,7 +21,15 @@ from full_volume_3d import (
     build_orthogonal_mri_figure,
     generate_3d_gradcam,
     predict_full_volume_npz,
+    _canonicalise_image,
+    _add_brain_surface,
+    _add_tumour_surface,
+    _crop_and_resize_probability,
 )
+
+# =========================
+# Page setup
+# =========================
 
 st.set_page_config(
     page_title="NeuroScan AI | Tumor Segmentation",
@@ -26,23 +37,38 @@ st.set_page_config(
 )
 
 
+# =========================
+# File paths
+# =========================
 
+# =========================
+# Experiment files
+# =========================
+
+# 2D baseline experiment
 BASELINE_2D_METRICS = "best_model/best_metrics.json"
 BASELINE_2D_HISTORY = "best_model/best_history.csv"
 BASELINE_2D_MODEL = "best_model/best_unet.pth"
 
+# 2D multi-head-attention experiment
 ATTENTION_2D_METRICS = "best_model/best_attention_metrics_2d.json"
 ATTENTION_2D_HISTORY = "best_model/best_attention_history_2d.csv"
 ATTENTION_2D_MODEL = "best_model/best_attention_unet2d.pth"
 
+# 3D baseline experiment
 BASELINE_3D_METRICS = "best_model_3d/best_metrics_3d.json"
 BASELINE_3D_HISTORY = "best_model_3d/best_history_3d.csv"
 BASELINE_3D_MODEL = "best_model_3d/best_unet3d.pth"
 
+# 3D multi-head-attention experiment
 ATTENTION_3D_METRICS = "best_model_3d/best_attention_metrics_3d.json"
 ATTENTION_3D_HISTORY = "best_model_3d/best_attention_history_3d.csv"
 ATTENTION_3D_MODEL = "best_model_3d/best_attention_unet3d.pth"
 
+# Compatibility aliases used by the rest of the existing UI.
+# =========================
+# Experiment file paths
+# =========================
 
 BASELINE_2D_METRICS = "best_model/best_metrics.json"
 BASELINE_2D_HISTORY = "best_model/best_history.csv"
@@ -73,6 +99,9 @@ SAMPLE_2D_DIR = "sample_data/2d"
 SAMPLE_3D_DIR = "sample_data/3d"
 
 
+# =========================
+# Helper functions
+# =========================
 
 def load_json(path):
     if not os.path.exists(path):
@@ -90,6 +119,7 @@ def load_csv(path):
 
 
 def metric_value(metrics, key):
+    # Safely read a numeric metric from a saved metrics JSON file.
     if not metrics:
         return None
 
@@ -148,6 +178,7 @@ def render_experiment_card(title, architecture, metrics, model_path=None):
 
 
 def render_experiment_comparison(workflow):
+    # Read-only comparison; it does not change the inference model.
     st.markdown("---")
     st.markdown("### Model Experiments")
     st.caption(
@@ -422,7 +453,8 @@ def _render_experiment_comparison(
     valid = comparison.dropna(how="all")
     if not valid.empty:
         st.markdown("#### Validation Metric Comparison")
-        st.bar_chart(valid, height=500)
+        st.bar_chart(valid)
+
     b_col = _dice_column(baseline_history)
     a_col = _dice_column(attention_history)
 
@@ -493,6 +525,7 @@ def read_file_bytes(path):
 
 
 def render_sample_folder_sidebar(folder, extensions, title, help_text, mime_type):
+    """Small sample-download folder shown in the analysis sidebar."""
     sample_files = get_sample_files(folder, extensions)
 
     with st.sidebar.expander(title, expanded=False):
@@ -519,6 +552,7 @@ def render_sample_folder_sidebar(folder, extensions, title, help_text, mime_type
 
 
 def render_export_2d_sidebar():
+    """Export buttons for the latest 2D prediction. Rendered after prediction so it updates immediately."""
     with st.sidebar.expander("Export 2D Results", expanded=False):
         if "export_2d" not in st.session_state:
             st.caption("Upload a 2D image first to export results.")
@@ -555,6 +589,7 @@ def render_export_2d_sidebar():
 
 
 def render_export_3d_sidebar():
+    """Export buttons for the latest selected 3D slice. Rendered after prediction so it updates immediately."""
     with st.sidebar.expander("Export 3D Slice Results", expanded=False):
         if "export_3d" not in st.session_state:
             st.caption("Upload a 3D volume first to export results.")
@@ -607,7 +642,8 @@ def render_export_3d_sidebar():
             use_container_width=True,
             key="export_3d_probability"
         )
-        if "gradcam_overlay" in export_3d:
+
+        if export_3d.get("gradcam_overlay") is not None:
             st.download_button(
                 label="Grad-CAM Overlay",
                 data=export_3d["gradcam_overlay"],
@@ -625,6 +661,11 @@ def image_to_png_bytes(image):
 
 
 def normalize_slice_for_display(slice_2d):
+    """Contrast-stretch MRI slices for display only.
+
+    This makes uploaded MRI views look cleaner in the web app. It does not
+    change the tensor sent into the model and does not affect Dice/metrics.
+    """
     slice_2d = np.asarray(slice_2d, dtype=np.float32)
     slice_2d = np.nan_to_num(slice_2d)
 
@@ -763,6 +804,313 @@ def predict_uploaded_3d_npz(uploaded_file, threshold=0.55):
         threshold=threshold,
     )
 
+def build_full_gradcam_volume(result, gradcam_result):
+    """Place the windowed Grad-CAM volume back into full MRI depth."""
+    image = np.asarray(result["image"])
+
+    if image.ndim == 4 and image.shape[0] == 4:
+        depth, height, width = image.shape[1:]
+    elif image.ndim == 4 and image.shape[-1] == 4:
+        depth, height, width = image.shape[:3]
+    elif image.ndim == 3:
+        depth, height, width = image.shape
+    else:
+        raise ValueError("Unsupported MRI shape for 3D Grad-CAM rendering.")
+
+    full_cam = np.zeros(
+        (depth, height, width),
+        dtype=np.float32,
+    )
+
+    cam = np.asarray(
+        gradcam_result["cam_volume"],
+        dtype=np.float32,
+    )
+
+    start = int(
+        gradcam_result.get(
+            "window_start",
+            0,
+        )
+    )
+
+    end = int(
+        gradcam_result.get(
+            "window_end",
+            start + cam.shape[0],
+        )
+    )
+
+    end = min(
+        end,
+        depth,
+        start + cam.shape[0],
+    )
+
+    valid_depth = max(
+        0,
+        end - start,
+    )
+
+    if valid_depth > 0:
+        full_cam[start:end] = cam[:valid_depth]
+
+    return full_cam
+
+
+def _add_gradcam_isosurface(
+    figure,
+    volume,
+    level,
+    color,
+    opacity,
+    name,
+):
+    """Add one Grad-CAM activation level as a smooth 3D surface."""
+    volume = np.asarray(volume, dtype=np.float32)
+    volume = ndi.gaussian_filter(volume, sigma=0.65)
+
+    if not (
+        float(volume.min())
+        < float(level)
+        < float(volume.max())
+    ):
+        return False
+
+    padded = np.pad(
+        volume,
+        2,
+        mode="constant",
+        constant_values=0.0,
+    )
+
+    vertices, faces, _, _ = marching_cubes(
+        padded,
+        level=float(level),
+        allow_degenerate=False,
+    )
+
+    vertices -= 2.0
+
+    figure.add_trace(
+        go.Mesh3d(
+            x=vertices[:, 2],
+            y=vertices[:, 1],
+            z=vertices[:, 0],
+            i=faces[:, 0],
+            j=faces[:, 1],
+            k=faces[:, 2],
+            color=color,
+            opacity=opacity,
+            name=name,
+            flatshading=False,
+            lighting=dict(
+                ambient=0.40,
+                diffuse=0.76,
+                specular=0.18,
+                roughness=0.58,
+                fresnel=0.08,
+            ),
+            lightposition=dict(
+                x=180,
+                y=220,
+                z=260,
+            ),
+            hoverinfo="skip",
+        )
+    )
+
+    return True
+
+
+def build_combined_tumor_gradcam_figure(
+    result,
+    gradcam_result,
+    modality_index=0,
+    show_tumour=True,
+    show_gradcam=True,
+):
+    """Use the project's GitHub brain surface and overlay selected 3D layers."""
+    image_4d = _canonicalise_image(
+        np.asarray(result["image"])
+    )
+
+    probability = np.asarray(
+        result["probability"],
+        dtype=np.float32,
+    )
+
+    threshold = float(
+        result.get(
+            "threshold",
+            0.55,
+        )
+    )
+
+    figure = go.Figure()
+
+    # This is the exact existing GitHub brain renderer.
+    bbox, _crop_shape, display_shape = _add_brain_surface(
+        figure,
+        image_4d,
+        int(modality_index),
+    )
+
+    if show_tumour:
+        _add_tumour_surface(
+            figure,
+            probability,
+            bbox,
+            display_shape,
+            threshold,
+        )
+
+    if show_gradcam and gradcam_result is not None:
+        full_cam = build_full_gradcam_volume(
+            result,
+            gradcam_result,
+        )
+
+        cam_small = _crop_and_resize_probability(
+            full_cam,
+            bbox,
+            display_shape,
+        )
+
+        cam_small = np.maximum(
+            np.asarray(cam_small, dtype=np.float32),
+            0.0,
+        )
+
+        positive = cam_small[
+            cam_small > 0
+        ]
+
+        if positive.size > 12:
+            high = float(
+                np.percentile(
+                    positive,
+                    99.0,
+                )
+            )
+
+            if high > 1e-8:
+                cam_small = np.clip(
+                    cam_small / high,
+                    0.0,
+                    1.0,
+                )
+
+                positive = cam_small[
+                    cam_small > 0.02
+                ]
+
+                if positive.size > 12:
+                    # Grad-CAM is continuous, so show three levels instead of
+                    # pretending it has one exact segmentation boundary.
+                    low_level = float(
+                        np.clip(
+                            np.percentile(
+                                positive,
+                                52.0,
+                            ),
+                            0.18,
+                            0.48,
+                        )
+                    )
+
+                    mid_level = float(
+                        np.clip(
+                            np.percentile(
+                                positive,
+                                70.0,
+                            ),
+                            low_level + 0.04,
+                            0.68,
+                        )
+                    )
+
+                    high_level = float(
+                        np.clip(
+                            np.percentile(
+                                positive,
+                                86.0,
+                            ),
+                            mid_level + 0.04,
+                            0.84,
+                        )
+                    )
+
+                    _add_gradcam_isosurface(
+                        figure,
+                        cam_small,
+                        low_level,
+                        "rgb(255,190,70)",
+                        0.18,
+                        "Grad-CAM — broader attention",
+                    )
+
+                    _add_gradcam_isosurface(
+                        figure,
+                        cam_small,
+                        mid_level,
+                        "rgb(255,142,32)",
+                        0.34,
+                        "Grad-CAM — medium attention",
+                    )
+
+                    _add_gradcam_isosurface(
+                        figure,
+                        cam_small,
+                        high_level,
+                        "rgb(255,86,24)",
+                        0.62,
+                        "Grad-CAM — strongest attention",
+                    )
+
+    figure.update_layout(
+        height=680,
+        margin=dict(
+            l=0,
+            r=0,
+            t=46,
+            b=0,
+        ),
+        title="MRI Brain — Tumor and 3D Grad-CAM",
+        scene=dict(
+            xaxis_visible=False,
+            yaxis_visible=False,
+            zaxis_visible=False,
+            aspectmode="data",
+            camera=dict(
+                eye=dict(
+                    x=1.50,
+                    y=1.35,
+                    z=1.05,
+                )
+            ),
+            bgcolor="rgb(13,15,20)",
+        ),
+        paper_bgcolor="rgb(13,15,20)",
+        plot_bgcolor="rgb(13,15,20)",
+        font=dict(
+            color="white",
+        ),
+        legend=dict(
+            orientation="h",
+            y=1.02,
+            x=0.5,
+            xanchor="center",
+        ),
+    )
+
+    return figure
+
+
+# =========================
+# Styling
+# =========================
+
 st.markdown(
     """
     <style>
@@ -893,6 +1241,9 @@ st.markdown(
 )
 
 
+# =========================
+# Initial page state
+# =========================
 
 if "active_page" not in st.session_state:
     st.session_state["active_page"] = "Home"
@@ -905,6 +1256,22 @@ if "upload_reset_counter" not in st.session_state:
 
 page = st.session_state["active_page"]
 
+
+# =========================
+# Header
+# =========================
+
+if page != "Home":
+    top_home_col, top_space = st.columns([1, 7])
+
+    with top_home_col:
+        if st.button(
+            "← Home",
+            key=f"home_top_{page.replace(' ', '_')}",
+            use_container_width=True,
+        ):
+            st.session_state["active_page"] = "Home"
+            st.rerun()
 
 brain_icon = ""
 
@@ -939,6 +1306,13 @@ st.markdown(
     """,
     unsafe_allow_html=True
 )
+
+# =========================
+# Main-page navigation
+# =========================
+
+# Pages are now controlled from the main screen instead of two separate
+# sidebar radio groups. The rest of the UI is kept the same.
 
 if "active_page" not in st.session_state:
     st.session_state["active_page"] = "Home"
@@ -993,6 +1367,8 @@ def render_home_button_bottom():
 
 page = st.session_state["active_page"]
 
+# Hide the sidebar everywhere except the two Analysis pages.
+# The sidebar is only used for analysis controls/export buttons.
 if page not in ["2D MRI Analysis", "3D MRI Analysis"]:
     st.markdown(
         """
@@ -1011,13 +1387,16 @@ if page not in ["2D MRI Analysis", "3D MRI Analysis"]:
         unsafe_allow_html=True
     )
 
+# Reset uploaded files and stored results when changing pages
 if page != st.session_state["current_page"]:
     keys_to_clear = [
         "result_3d",
         "input_mode_3d_previous",
         "export_2d",
         "export_3d",
-        "last_3d_upload_signature"
+        "last_3d_upload_signature",
+        "gradcam_3d",
+        "gradcam_3d_key"
     ]
 
     for key in keys_to_clear:
@@ -1027,6 +1406,9 @@ if page != st.session_state["current_page"]:
     st.session_state["upload_reset_counter"] += 1
     st.session_state["current_page"] = page
 
+# =========================
+# Sidebar controls
+# =========================
 
 if page == "2D MRI Analysis":
     render_sample_folder_sidebar(
@@ -1110,6 +1492,10 @@ elif page == "3D MRI Analysis":
         )
 
 
+# =========================
+# Model metric summary values
+# =========================
+
 best_metrics = load_json(BEST_METRICS_PATH)
 best_metrics_3d = load_json(BEST_METRICS_3D_PATH)
 
@@ -1130,6 +1516,9 @@ if best_metrics_3d is not None:
 else:
     dice_3d_text = "No best model yet"
 
+# =========================
+# Home / workflow pages
+# =========================
 
 if page == "Home":
     st.subheader("How to use this website")
@@ -1276,6 +1665,10 @@ elif page == "3D Info":
     """)
 
 
+# =========================
+# Page 1: 2D MRI Analysis
+# =========================
+
 elif page == "2D MRI Analysis":
     render_workflow_buttons("2D")
     st.markdown("---")
@@ -1381,17 +1774,23 @@ elif page == "2D MRI Analysis":
         )
 
 
+# =========================
+# Page 2: 3D MRI Analysis
+# =========================
+
 elif page == "3D MRI Analysis":
     render_workflow_buttons("3D")
     st.markdown("---")
     st.subheader("3D MRI Volume Analysis")
 
-
-
     uploaded_3d_file = st.file_uploader(
         "Upload 3D MRI volume (.NPZ)",
         type=["npz"],
-        help="Supports full patient volumes such as [4,155,240,240], plus older 32-slice samples. The model processes full volumes in overlapping 32-slice windows.",
+        help=(
+            "Supports full patient volumes such as [4,155,240,240], plus "
+            "older 32-slice samples. The model processes full volumes in "
+            "overlapping 32-slice windows."
+        ),
         key=f"upload_3d_{st.session_state['upload_reset_counter']}"
     )
 
@@ -1400,38 +1799,53 @@ elif page == "3D MRI Analysis":
             f"{uploaded_3d_file.name}_{uploaded_3d_file.size}_{threshold_3d}"
         )
 
-        if st.session_state.get("last_3d_upload_signature") != upload_signature:
+        if (
+            st.session_state.get("last_3d_upload_signature")
+            != upload_signature
+        ):
             with st.spinner("Analyzing 3D MRI volume..."):
                 result = predict_uploaded_3d_npz(
                     uploaded_file=uploaded_3d_file,
-                    threshold=threshold_3d
+                    threshold=threshold_3d,
                 )
 
             st.session_state["result_3d"] = result
             st.session_state["last_3d_upload_signature"] = upload_signature
 
+            for cache_key in (
+                "gradcam_3d",
+                "gradcam_3d_key",
+            ):
+                if cache_key in st.session_state:
+                    del st.session_state[cache_key]
+
     else:
-        if "result_3d" in st.session_state:
-            del st.session_state["result_3d"]
-        if "export_3d" in st.session_state:
-            del st.session_state["export_3d"]
-        if "last_3d_upload_signature" in st.session_state:
-            del st.session_state["last_3d_upload_signature"]
+        for key in (
+            "result_3d",
+            "export_3d",
+            "last_3d_upload_signature",
+            "gradcam_3d",
+            "gradcam_3d_key",
+        ):
+            if key in st.session_state:
+                del st.session_state[key]
 
         st.info(
-            "Upload a .NPZ 3D MRI volume to generate a predicted tumor mask, "
-            "slice overlays, probability map, colored Grad-CAM, and interactive 3D views."
+            "Upload a .NPZ 3D MRI volume to generate the slice views, "
+            "automatic Grad-CAM explanation, and interactive 3D rendering."
         )
 
     if "result_3d" in st.session_state:
         result = st.session_state["result_3d"]
 
-        suggested_slice, _, _ = get_representative_3d_indices(result["pred_mask"])
+        suggested_slice, _, _ = get_representative_3d_indices(
+            result["pred_mask"]
+        )
 
         st.markdown("### 3D Slice Explorer")
         st.caption(
-            "Use the slider to move through the uploaded MRI volume. "
-            "The default slice is selected from the largest predicted tumor area."
+            "Use the slider to move through the MRI volume. "
+            "Grad-CAM updates automatically for the selected slice."
         )
 
         slice_index = st.slider(
@@ -1440,7 +1854,7 @@ elif page == "3D MRI Analysis":
             max_value=result["depth"] - 1,
             value=suggested_slice,
             step=1,
-            help="Move through the 3D MRI volume slice by slice."
+            help="Move through the 3D MRI volume slice by slice.",
         )
 
         (
@@ -1448,187 +1862,218 @@ elif page == "3D MRI Analysis":
             pred_mask_img,
             true_mask_img,
             overlay_img,
-            prob_img
+            prob_img,
         ) = get_3d_display_slices(
             result,
             slice_index=slice_index,
             modality_index=modality_index,
-            overlay_alpha=overlay_alpha_3d
+            overlay_alpha=overlay_alpha_3d,
         )
-        input_img_display = resize_for_display(input_img, resample=Image.Resampling.LANCZOS)
-        pred_mask_img_display = resize_for_display(pred_mask_img, resample=Image.Resampling.NEAREST)
-        overlay_img_display = resize_for_display(overlay_img, resample=Image.Resampling.NEAREST)
-        prob_img_display = resize_for_display(prob_img, resample=Image.Resampling.LANCZOS)
-        true_mask_img_display = (
-            resize_for_display(true_mask_img, resample=Image.Resampling.NEAREST)
-            if true_mask_img is not None else None
+
+        input_img_display = resize_for_display(
+            input_img,
+            resample=Image.Resampling.LANCZOS,
+        )
+
+        pred_mask_img_display = resize_for_display(
+            pred_mask_img,
+            resample=Image.Resampling.NEAREST,
+        )
+
+        overlay_img_display = resize_for_display(
+            overlay_img,
+            resample=Image.Resampling.NEAREST,
+        )
+
+        prob_img_display = resize_for_display(
+            prob_img,
+            resample=Image.Resampling.LANCZOS,
+        )
+
+        gradcam_key = (
+            f"{result['volume_id']}_{slice_index}_{modality_index}_"
+            f"{BEST_MODEL_3D_PATH}"
+        )
+
+        if (
+            "gradcam_3d" not in st.session_state
+            or st.session_state.get("gradcam_3d_key") != gradcam_key
+        ):
+            with st.spinner("Generating Grad-CAM for this slice..."):
+                gradcam_result = generate_3d_gradcam(
+                    result=result,
+                    model_path=BEST_MODEL_3D_PATH,
+                    device=get_device_3d(),
+                    selected_slice=slice_index,
+                    modality_index=modality_index,
+                    heatmap_alpha=0.42,
+                )
+
+            st.session_state["gradcam_3d"] = gradcam_result
+            st.session_state["gradcam_3d_key"] = gradcam_key
+
+        else:
+            gradcam_result = st.session_state["gradcam_3d"]
+
+        gradcam_overlay_display = resize_for_display(
+            Image.fromarray(
+                gradcam_result["overlay_rgb"]
+            ),
+            resample=Image.Resampling.LANCZOS,
         )
 
         st.session_state["export_3d"] = {
             "input_img": image_to_png_bytes(input_img_display),
             "pred_mask_img": image_to_png_bytes(pred_mask_img_display),
             "overlay_img": image_to_png_bytes(overlay_img_display),
-            "true_mask_img": image_to_png_bytes(true_mask_img_display) if true_mask_img_display is not None else None,
+            "true_mask_img": None,
             "prob_img": image_to_png_bytes(prob_img_display),
-
-            "input_name": f"3d_volume_{result['volume_id']}_slice_{slice_index}_mri.png",
-            "pred_name": f"3d_volume_{result['volume_id']}_slice_{slice_index}_prediction_mask.png",
-            "overlay_name": f"3d_volume_{result['volume_id']}_slice_{slice_index}_overlay.png",
-            "true_name": f"3d_volume_{result['volume_id']}_slice_{slice_index}_ground_truth.png",
-            "prob_name": f"3d_volume_{result['volume_id']}_slice_{slice_index}_probability.png"
+            "gradcam_overlay": image_to_png_bytes(gradcam_overlay_display),
+            "input_name": (
+                f"3d_volume_{result['volume_id']}_slice_"
+                f"{slice_index}_mri.png"
+            ),
+            "pred_name": (
+                f"3d_volume_{result['volume_id']}_slice_"
+                f"{slice_index}_prediction_mask.png"
+            ),
+            "overlay_name": (
+                f"3d_volume_{result['volume_id']}_slice_"
+                f"{slice_index}_overlay.png"
+            ),
+            "true_name": "",
+            "prob_name": (
+                f"3d_volume_{result['volume_id']}_slice_"
+                f"{slice_index}_probability.png"
+            ),
+            "gradcam_name": (
+                f"3d_volume_{result['volume_id']}_slice_"
+                f"{slice_index}_gradcam_overlay.png"
+            ),
         }
 
-        if true_mask_img_display is not None:
-            col1, col2, col3, col4, col5 = st.columns(5)
+        col1, col2, col3, col4, col5 = st.columns(5)
 
-            with col1:
-                st.markdown("#### MRI Slice")
-                st.image(input_img_display, use_container_width=True, caption=f"Slice {slice_index}")
-
-            with col2:
-                st.markdown("#### Prediction")
-                st.image(pred_mask_img_display, use_container_width=True, caption="Predicted tumor mask")
-
-            with col3:
-                st.markdown("#### Overlay")
-                st.image(overlay_img_display, use_container_width=True, caption="Prediction over MRI")
-
-            with col4:
-                st.markdown("#### Ground Truth")
-                st.image(true_mask_img_display, use_container_width=True, caption="Dataset ground-truth mask")
-
-            with col5:
-                st.markdown("#### Probability")
-                st.image(prob_img_display, use_container_width=True, caption="Model probability map")
-
-        else:
-            col1, col2, col3, col4 = st.columns(4)
-
-            with col1:
-                st.markdown("#### MRI Slice")
-                st.image(input_img_display, use_container_width=True, caption=f"Slice {slice_index}")
-
-            with col2:
-                st.markdown("#### Prediction")
-                st.image(pred_mask_img_display, use_container_width=True, caption="Predicted tumor mask")
-
-            with col3:
-                st.markdown("#### Overlay")
-                st.image(overlay_img_display, use_container_width=True, caption="Prediction over MRI")
-
-            with col4:
-                st.markdown("#### Probability")
-                st.image(prob_img_display, use_container_width=True, caption="Model probability map")
-
-        st.markdown("---")
-
-        with st.expander(
-            "🔥 3D Grad-CAM Explanation",
-            expanded=False,
-        ):
-            st.caption(
-                "Generate a gradient-based explanation for the selected slice. "
-                "Blue indicates lower influence; yellow/red indicate stronger influence."
+        with col1:
+            st.markdown("#### MRI Slice")
+            st.image(
+                input_img_display,
+                use_container_width=True,
+                caption=f"Slice {slice_index}",
             )
 
-            gradcam_key = (
-                f"{result['volume_id']}_{slice_index}_{modality_index}_"
-                f"{BEST_MODEL_3D_PATH}"
+        with col2:
+            st.markdown("#### Prediction")
+            st.image(
+                pred_mask_img_display,
+                use_container_width=True,
+                caption="Predicted tumor mask",
             )
 
-            if st.button(
-                "Generate 3D Grad-CAM",
-                key=f"generate_3d_gradcam_{slice_index}_{modality_index}",
-            ):
-                with st.spinner("Generating 3D Grad-CAM..."):
-                    st.session_state["gradcam_3d"] = generate_3d_gradcam(
-                        result=result,
-                        model_path=BEST_MODEL_3D_PATH,
-                        device=get_device_3d(),
-                        selected_slice=slice_index,
-                        modality_index=modality_index,
-                        heatmap_alpha=0.42,
-                    )
-                    gradcam_result = st.session_state["gradcam_3d"]
+        with col3:
+            st.markdown("#### Overlay")
+            st.image(
+                overlay_img_display,
+                use_container_width=True,
+                caption="Prediction over MRI",
+            )
 
-                    st.session_state["export_3d"]["gradcam_overlay"] = image_to_png_bytes(
-                        Image.fromarray(gradcam_result["overlay_rgb"])
-                    )
-                    
-                    st.session_state["export_3d"]["gradcam_name"] = (
-                        f"3d_volume_{result['volume_id']}_slice_{slice_index}_gradcam_overlay.png"
-                    )
-                    st.session_state["gradcam_3d_key"] = gradcam_key
+        with col4:
+            st.markdown("#### Grad-CAM")
+            st.image(
+                gradcam_overlay_display,
+                use_container_width=True,
+                caption="Model attention for this slice",
+            )
 
-            if (
-                "gradcam_3d" in st.session_state
-                and st.session_state.get("gradcam_3d_key") == gradcam_key
-            ):
-                gradcam_result = st.session_state["gradcam_3d"]
-
-                _, heat_col, overlay_col, _ = st.columns([1, 2, 2, 1])
-
-                with heat_col:
-                    st.markdown("##### Heatmap")
-                    st.image(
-                        gradcam_result["heatmap_rgb"],
-                        use_container_width=True,
-                        caption="3D Grad-CAM",
-                    )
-
-                with overlay_col:
-                    st.markdown("##### Overlay")
-                    st.image(
-                        gradcam_result["overlay_rgb"],
-                        use_container_width=True,
-                        caption=f"Slice {slice_index}",
-                    )
-
-                st.caption(
-                    f"Architecture: {gradcam_result['architecture']} · "
-                    f"model window: slices {gradcam_result['window_start']}–"
-                    f"{gradcam_result['window_end'] - 1}"
-                )
+        with col5:
+            st.markdown("#### Probability")
+            st.image(
+                prob_img_display,
+                use_container_width=True,
+                caption="Model probability map",
+            )
 
         st.markdown("---")
 
-        tumor_voxels = int(result["pred_mask"].sum())
-
-        if result.get("true_mask") is not None:
-            true_voxels = int(result["true_mask"].sum())
-            m1, m2, m3 = st.columns(3)
-        else:
-            true_voxels = None
-            m1, m2 = st.columns(2)
-
-        with m1:
-            if tumor_voxels > 0:
-                st.metric("Prediction Result", "Detected")
-            else:
-                st.metric("Prediction Result", "Not detected")
-
-        with m2:
-            st.metric("Predicted Tumor Voxels", tumor_voxels)
-
-        if true_voxels is not None:
-            with m3:
-                st.metric("Ground Truth Tumor Voxels", true_voxels)
-
-
-        st.markdown("---")
-        st.markdown("### Interactive MRI Surface View")
-        st.caption(
-            "Drag to rotate, scroll to zoom, and double-click to reset. "
-            "The transparent grey triangle mesh is the MRI brain surface, and the red mesh "
-            "is the predicted tumour surface. Surface smoothing affects display only."
+        tumor_voxels = int(
+            result["pred_mask"].sum()
         )
-        figure_3d = build_tumor_figure(result, modality_index=modality_index)
-        st.plotly_chart(figure_3d, use_container_width=True)
+
+        metric_col1, metric_col2 = st.columns(2)
+
+        with metric_col1:
+            st.metric(
+                "Prediction Result",
+                (
+                    "Detected"
+                    if tumor_voxels > 0
+                    else "Not detected"
+                ),
+            )
+
+        with metric_col2:
+            st.metric(
+                "Predicted Tumor Voxels",
+                tumor_voxels,
+            )
+
+        st.markdown("---")
+        st.markdown("### Interactive 3D View")
+
+        render_col1, render_col2 = st.columns(2)
+
+        with render_col1:
+            show_tumour_render = st.checkbox(
+                "Show Tumor Rendering",
+                value=True,
+                key="show_tumour_render_3d",
+            )
+
+        with render_col2:
+            show_gradcam_render = st.checkbox(
+                "Show 3D Grad-CAM",
+                value=False,
+                key="show_gradcam_render_3d",
+            )
+
+        st.caption(
+            "Red = predicted tumor. "
+            "Orange/yellow = Grad-CAM attention; stronger attention is "
+            "shown with a brighter, more opaque inner surface."
+        )
+
+        if not show_tumour_render and not show_gradcam_render:
+            st.info(
+                "Select Tumor Rendering, 3D Grad-CAM, or both."
+            )
+
+        else:
+            figure_3d = build_combined_tumor_gradcam_figure(
+                result=result,
+                gradcam_result=gradcam_result,
+                modality_index=modality_index,
+                show_tumour=show_tumour_render,
+                show_gradcam=show_gradcam_render,
+            )
+
+            st.plotly_chart(
+                figure_3d,
+                use_container_width=True,
+            )
+
         if result.get("window_count", 1) > 1:
             st.caption(
-                f"Full depth: {result['depth']} slices. The existing 32-slice model was run over "
-                f"{result['window_count']} overlapping windows and merged into one prediction."
+                f"Full depth: {result['depth']} slices. "
+                f"The 32-slice model was run over "
+                f"{result['window_count']} overlapping windows and "
+                "merged into one prediction."
             )
+
+
+# =========================
+# Page 3: 2D Training Progress
+# =========================
 
 elif page == "2D Training Progress":
     render_workflow_buttons("2D")
@@ -1672,6 +2117,9 @@ elif page == "2D Training Progress":
             "2D",
         )
 
+# =========================
+# Page 4: 3D Training Progress
+# =========================
 elif page == "3D Training Progress":
     render_workflow_buttons("3D")
     st.markdown("---")
@@ -1714,6 +2162,8 @@ elif page == "3D Training Progress":
             "3D",
         )
 
+# Sidebar export buttons are rendered after page content so they update immediately
+# after a new upload/prediction and never duplicate.
 if page == "2D MRI Analysis":
     st.sidebar.markdown("---")
     render_export_2d_sidebar()
@@ -1721,5 +2171,4 @@ elif page == "3D MRI Analysis":
     st.sidebar.markdown("---")
     render_export_3d_sidebar()
 
-if page != "Home":
-    render_home_button_bottom()
+# Home navigation is shown at the top of every non-home page.
