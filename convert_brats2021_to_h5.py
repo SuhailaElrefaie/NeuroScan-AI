@@ -7,7 +7,6 @@ import nibabel as nib
 import numpy as np
 
 
-# Change INPUT_ROOT for your extracted BraTS 2021 folder.
 INPUT_ROOT = Path("archive/BraTS2021_Training_Data")
 OUTPUT_ROOT = Path("archive/BraTS2021_h5/content/data")
 
