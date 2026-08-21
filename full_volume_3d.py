@@ -1,15 +1,3 @@
-"""Full-volume 3D inference and visualisation helpers for NeuroScan AI.
-
-This version keeps the complete-volume sliding-window inference used by the
-project, supports the newer attention U-Net checkpoint, and uses a hybrid 3D
-viewer:
-  * the MRI anatomy is shown as a translucent grey volume;
-  * the predicted tumour is extracted as a smooth triangular surface with
-    marching cubes.
-
-The renderer is intentionally implemented inside the existing Streamlit /
-Plotly pipeline. It does not copy the linked neuro-voxel implementation.
-"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -19,7 +7,6 @@ import numpy as np
 
 
 def _display_normalise_slice(slice_2d):
-    """Normalize one MRI slice to uint8 for display."""
     array = np.nan_to_num(
         np.asarray(slice_2d, dtype=np.float32)
     )
@@ -86,9 +73,6 @@ def generate_3d_gradcam(
     modality_index=0,
     heatmap_alpha=0.42,
 ):
-    """
-    Generate colored Grad-CAM for the 3D model around the selected MRI slice.
-    """
 
     image = _canonicalise_image(
         np.asarray(result["image"])
@@ -280,12 +264,6 @@ def build_orthogonal_mri_figure(
     sagittal_index=None,
     show_prediction=True,
 ):
-    """
-    MRI-viewer style axial/coronal/sagittal display.
-
-    Red pixels show the predicted tumour.
-    """
-
     image = np.asarray(
         result["image"],
         dtype=np.float32
@@ -548,13 +526,6 @@ def _restore_probability(
 
 
 def _load_model(model_path: Union[str, Path], device: torch.device) -> torch.nn.Module:
-    """Load either a legacy raw state_dict or the newer wrapped attention checkpoint.
-
-    Attention training saves metadata plus the actual weights under
-    ``model_state_dict``. Older project checkpoints may be a raw state_dict.
-    This loader supports both formats and builds the architecture from checkpoint
-    metadata when it is available.
-    """
     try:
         checkpoint = torch.load(
             model_path,
@@ -661,12 +632,6 @@ from scipy import ndimage as ndi
 
 
 def _estimate_background(modality: np.ndarray) -> float:
-    """Estimate the scanner/background value from the outer shell.
-
-    BraTS sample NPZ files in this project are already normalized and their
-    background is a constant negative value, not zero. Using ``volume != 0``
-    therefore incorrectly marks the whole cuboid as anatomy.
-    """
     v = np.asarray(modality, dtype=np.float32)
     n = 3
     shell = np.concatenate([
@@ -678,12 +643,6 @@ def _estimate_background(modality: np.ndarray) -> float:
 
 
 def _brain_mask_from_mri(image_4d: np.ndarray) -> np.ndarray:
-    """Recover the real BraTS brain support from all four modalities.
-
-    A voxel is anatomy when it differs from the modality-specific background.
-    All four modalities in the exported project samples share the same support,
-    so a majority vote is used as a guard against a noisy channel.
-    """
     image = np.asarray(image_4d, dtype=np.float32)
     votes = np.zeros(image.shape[1:], dtype=np.uint8)
 
@@ -697,8 +656,6 @@ def _brain_mask_from_mri(image_4d: np.ndarray) -> np.ndarray:
     required = max(1, int(np.ceil(image.shape[0] / 2)))
     mask = votes >= required
 
-    # Keep the main 3-D anatomical object, close small cracks and fill cavities
-    # so marching cubes extracts the external brain boundary rather than noise.
     labels, count = ndi.label(mask)
     if count > 1:
         sizes = ndi.sum(mask, labels, index=np.arange(1, count + 1))
@@ -745,10 +702,7 @@ def _normalise_mri_for_surface(modality: np.ndarray, brain_mask: np.ndarray) -> 
 
 
 def _surface_from_binary(mask: np.ndarray, sigma: float = 1.15):
-    """Create a smooth closed triangular surface from a binary 3-D mask."""
     field = ndi.gaussian_filter(mask.astype(np.float32), sigma=sigma)
-    # Zero padding guarantees a closed surface even when anatomy touches the
-    # first/last acquired MRI slice.
     field = np.pad(field, 2, mode='constant', constant_values=0.0)
     if not (field.min() < 0.5 < field.max()):
         raise ValueError('The extracted anatomy does not contain a usable surface.')
@@ -858,12 +812,6 @@ def build_tumor_figure(
     result: Dict[str, object],
     modality_index: int = 0,
 ) -> go.Figure:
-    """True MRI-derived brain surface + predicted tumour surface.
-
-    No point cloud, no Plotly Volume cuboid and no slice-plane cross. The brain
-    boundary is recovered from the actual BraTS background value stored in the
-    uploaded NPZ and rendered as a smooth triangular mesh.
-    """
     image_4d = _canonicalise_image(np.asarray(result['image']))
     probability = np.asarray(result['probability'], dtype=np.float32)
     threshold = float(result.get('threshold', 0.55))
