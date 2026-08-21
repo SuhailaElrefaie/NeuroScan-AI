@@ -3,13 +3,6 @@ import torch.nn as nn
 
 
 class DoubleConv3D(nn.Module):
-    """
-    3D version of the double convolution block.
-
-    It uses Conv3d instead of Conv2d, so it can process full MRI volumes:
-    [batch, channels, depth, height, width]
-    """
-
     def __init__(self, in_channels, out_channels):
         super().__init__()
 
@@ -28,18 +21,6 @@ class DoubleConv3D(nn.Module):
 
 
 class UNet3D(nn.Module):
-    """
-    3D U-Net for brain tumor segmentation.
-
-    Input shape:
-        [batch, channels, depth, height, width]
-
-    Output shape:
-        [batch, 1, depth, height, width]
-
-    The output is still a binary tumor mask, same idea as the 2D model.
-    """
-
     def __init__(self, in_channels=4, out_channels=1):
         super().__init__()
 
