@@ -1,9 +1,3 @@
-"""Train the deeper attention 3D U-Net on the full converted BraTS dataset.
-
-The script does not overwrite the currently deployed baseline.  It produces a
-candidate checkpoint named best_model_3d/best_attention_unet3d.pth.  Promote it
-only after its validation metrics are satisfactory.
-"""
 from __future__ import annotations
 
 import argparse
