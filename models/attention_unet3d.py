@@ -1,10 +1,3 @@
-"""Deeper 3D U-Net with bottleneck multi-head self-attention.
-
-Written for NeuroScan AI.  The architecture is intentionally different from the
-linked neuro-voxel repository: it uses residual GroupNorm convolution blocks,
-four encoder levels, a spatial positional convolution, PyTorch MultiheadAttention
-at the compact bottleneck, and the project's existing Streamlit/Plotly pipeline.
-"""
 from __future__ import annotations
 
 import torch
@@ -44,8 +37,6 @@ class ResidualConvBlock3D(nn.Module):
 
 
 class BottleneckMultiHeadAttention3D(nn.Module):
-    """Global self-attention over the compact D×H×W bottleneck token grid."""
-
     def __init__(self, channels: int, num_heads: int = 8, dropout: float = 0.1) -> None:
         super().__init__()
         if channels % num_heads != 0:
@@ -112,8 +103,6 @@ class UpBlock3D(nn.Module):
 
 
 class AttentionUNet3D(nn.Module):
-    """Four-level residual 3D U-Net with bottleneck multi-head attention."""
-
     def __init__(
         self,
         in_channels: int = 4,
