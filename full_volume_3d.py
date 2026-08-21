@@ -16,13 +16,55 @@ from pathlib import Path
 from typing import BinaryIO, Dict, Optional, Tuple, Union
 
 import numpy as np
+
+
+def _display_normalise_slice(slice_2d):
+    """Normalize one MRI slice to uint8 for display."""
+    array = np.nan_to_num(
+        np.asarray(slice_2d, dtype=np.float32)
+    )
+
+    low, high = np.percentile(
+        array,
+        (1.0, 99.0)
+    )
+
+    if high <= low + 1e-8:
+        low = float(array.min())
+        high = float(array.max())
+
+    if high <= low + 1e-8:
+        return np.zeros_like(
+            array,
+            dtype=np.uint8
+        )
+
+    array = np.clip(
+        array,
+        low,
+        high
+    )
+
+    array = (
+        array - low
+    ) / (
+        high - low + 1e-8
+    )
+
+    return (
+        array * 255
+    ).astype(np.uint8)
+
 import plotly.graph_objects as go
 import torch
 import torch.nn.functional as F
 from skimage.measure import marching_cubes
-
+from PIL import Image
+from plotly.subplots import make_subplots
 from models.unet3d import UNet3D
 from models.attention_unet3d import AttentionUNet3D
+from gradcam import GradCAM, create_gradcam_overlay
+from gradcam import GradCAM
 
 MODEL_DEPTH = 32
 MODEL_HEIGHT = 160
@@ -36,6 +78,367 @@ MODALITY_NAMES = {
     3: "T2",
 }
 
+def generate_3d_gradcam(
+    result,
+    model_path,
+    device,
+    selected_slice,
+    modality_index=0,
+    heatmap_alpha=0.42,
+):
+    """
+    Generate colored Grad-CAM for the 3D model around the selected MRI slice.
+    """
+
+    image = _canonicalise_image(
+        np.asarray(result["image"])
+    )
+
+    _, depth, height, width = image.shape
+
+    selected_slice = int(
+        np.clip(
+            selected_slice,
+            0,
+            depth - 1
+        )
+    )
+
+    start = selected_slice - MODEL_DEPTH // 2
+
+    start = max(
+        0,
+        min(
+            start,
+            max(
+                depth - MODEL_DEPTH,
+                0
+            )
+        )
+    )
+
+    end = min(
+        start + MODEL_DEPTH,
+        depth
+    )
+
+    valid_depth = end - start
+
+    window = image[:, start:end]
+
+    network_input = _prepare_window(
+        window
+    ).to(device)
+
+    model = _load_model(
+        model_path,
+        device
+    )
+
+    if isinstance(model, AttentionUNet3D):
+        target_layer = model.enc4
+
+    else:
+        target_layer = model.enc3
+
+    gradcam = GradCAM(
+        model,
+        target_layer
+    )
+
+    try:
+        cam = gradcam.generate(
+            network_input
+        )
+
+    finally:
+        gradcam.remove_hooks()
+
+    cam_tensor = (
+        torch
+        .from_numpy(cam)
+        .unsqueeze(0)
+        .unsqueeze(0)
+        .float()
+    )
+
+    restored = F.interpolate(
+        cam_tensor,
+        size=(
+            MODEL_DEPTH,
+            height,
+            width
+        ),
+        mode="trilinear",
+        align_corners=False
+    )
+
+    restored = (
+        restored
+        .squeeze(0)
+        .squeeze(0)
+        .numpy()
+        .astype(np.float32)
+    )
+
+    restored = restored[:valid_depth]
+
+    local_slice = int(
+        np.clip(
+            selected_slice - start,
+            0,
+            restored.shape[0] - 1
+        )
+    )
+
+    cam_slice = restored[
+        local_slice
+    ]
+
+    mri_slice = _display_normalise_slice(
+        image[
+            int(modality_index),
+            selected_slice
+        ]
+    )
+
+    overlay_pil, heatmap_pil = (
+        create_gradcam_overlay(
+            Image.fromarray(mri_slice),
+            cam_slice,
+            heatmap_alpha=heatmap_alpha
+        )
+    )
+
+    return {
+        "cam_volume": restored,
+        "cam_slice": cam_slice,
+        "overlay_rgb": np.asarray(
+            overlay_pil
+        ),
+        "heatmap_rgb": np.asarray(
+            heatmap_pil
+        ),
+        "window_start": int(start),
+        "window_end": int(end),
+        "architecture": type(model).__name__,
+    }
+
+def create_3d_gradcam_overlay(
+    mri_slice,
+    cam_slice,
+    alpha=0.40
+):
+    import cv2
+
+    mri = _display_normalise_slice(
+        mri_slice
+    )
+
+    mri_rgb = np.stack(
+        [mri, mri, mri],
+        axis=-1
+    )
+
+    mri_rgb = (
+        mri_rgb * 255
+    ).astype(np.uint8)
+
+    heatmap = (
+        np.clip(
+            cam_slice,
+            0,
+            1
+        ) * 255
+    ).astype(np.uint8)
+
+    heatmap = cv2.applyColorMap(
+        heatmap,
+        cv2.COLORMAP_JET
+    )
+
+    heatmap = cv2.cvtColor(
+        heatmap,
+        cv2.COLOR_BGR2RGB
+    )
+
+    overlay = cv2.addWeighted(
+        mri_rgb,
+        1.0 - alpha,
+        heatmap,
+        alpha,
+        0
+    )
+
+    return overlay, heatmap
+
+def build_orthogonal_mri_figure(
+    result,
+    modality_index=0,
+    axial_index=None,
+    coronal_index=None,
+    sagittal_index=None,
+    show_prediction=True,
+):
+    """
+    MRI-viewer style axial/coronal/sagittal display.
+
+    Red pixels show the predicted tumour.
+    """
+
+    image = np.asarray(
+        result["image"],
+        dtype=np.float32
+    )[int(modality_index)]
+
+    prediction = np.asarray(
+        result["pred_mask"],
+        dtype=np.uint8
+    )
+
+    depth, height, width = image.shape
+
+    if axial_index is None:
+        axial_index = depth // 2
+
+    if coronal_index is None:
+        coronal_index = height // 2
+
+    if sagittal_index is None:
+        sagittal_index = width // 2
+
+    axial_index = int(
+        np.clip(
+            axial_index,
+            0,
+            depth - 1
+        )
+    )
+
+    coronal_index = int(
+        np.clip(
+            coronal_index,
+            0,
+            height - 1
+        )
+    )
+
+    sagittal_index = int(
+        np.clip(
+            sagittal_index,
+            0,
+            width - 1
+        )
+    )
+
+    axial = _display_normalise_slice(
+        image[axial_index]
+    )
+
+    coronal = _display_normalise_slice(
+        image[:, coronal_index, :]
+    )
+
+    sagittal = _display_normalise_slice(
+        image[:, :, sagittal_index]
+    )
+
+    axial_mask = prediction[
+        axial_index
+    ]
+
+    coronal_mask = prediction[
+        :,
+        coronal_index,
+        :
+    ]
+
+    sagittal_mask = prediction[
+        :,
+        :,
+        sagittal_index
+    ]
+
+    figure = make_subplots(
+        rows=1,
+        cols=3,
+        subplot_titles=[
+            f"Axial — slice {axial_index}",
+            f"Coronal — slice {coronal_index}",
+            f"Sagittal — slice {sagittal_index}",
+        ]
+    )
+
+    slices = [
+        (axial, axial_mask),
+        (coronal, coronal_mask),
+        (sagittal, sagittal_mask),
+    ]
+
+    for column, (
+        mri_slice,
+        mask_slice
+    ) in enumerate(
+        slices,
+        start=1
+    ):
+
+        figure.add_trace(
+            go.Heatmap(
+                z=mri_slice,
+                colorscale="gray",
+                showscale=False,
+                hoverinfo="skip"
+            ),
+            row=1,
+            col=column
+        )
+
+        if (
+            show_prediction
+            and np.any(mask_slice)
+        ):
+
+            overlay = np.where(
+                mask_slice > 0,
+                1.0,
+                np.nan
+            )
+
+            figure.add_trace(
+                go.Heatmap(
+                    z=overlay,
+                    colorscale=[
+                        [0, "rgba(255,0,0,0.65)"],
+                        [1, "rgba(255,0,0,0.65)"]
+                    ],
+                    zmin=0,
+                    zmax=1,
+                    showscale=False,
+                    hoverinfo="skip"
+                ),
+                row=1,
+                col=column
+            )
+
+    figure.update_yaxes(
+        autorange="reversed",
+        scaleanchor="x"
+    )
+
+    figure.update_layout(
+        height=420,
+        margin=dict(
+            l=10,
+            r=10,
+            t=55,
+            b=10
+        ),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="black"
+    )
+
+    return figure
 
 def _canonicalise_image(array: np.ndarray) -> np.ndarray:
     array = np.asarray(array, dtype=np.float32)

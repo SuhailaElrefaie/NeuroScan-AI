@@ -1,18 +1,22 @@
 import cv2
+import json
+import os
+
 import numpy as np
 import torch
 from PIL import Image
 import torchvision.transforms as T
 
 from gradcam import GradCAM, create_gradcam_overlay
-from models.unet import UNet
+from models.attention_unet2d import AttentionUNet2D
 
 
-MODEL_PATH = "best_model/best_unet.pth"
+MODEL_PATH = "best_model/best_attention_unet2d.pth"
+METRICS_PATH = "best_model/best_attention_metrics_2d.json"
 IMAGE_SIZE = (256, 256)
 
 
-def get_device(): # Select the best available device for inference.
+def get_device():
     if torch.cuda.is_available():
         return torch.device("cuda")
 
@@ -22,86 +26,83 @@ def get_device(): # Select the best available device for inference.
     return torch.device("cpu")
 
 
-def load_model(): # Load the trained U-Net model from disk.
+def load_model():
     device = get_device()
 
-    model = UNet().to(device)
-    model.load_state_dict(torch.load(MODEL_PATH, map_location=device))
+    if not os.path.exists(MODEL_PATH):
+        raise FileNotFoundError(
+            f"Attention model not found: {MODEL_PATH}. "
+            "Copy best_attention_unet2d.pth into best_model/ first."
+        )
+
+    model = AttentionUNet2D(
+        in_channels=1,
+        out_channels=1,
+        num_heads=8,
+    ).to(device)
+
+    state_dict = torch.load(
+        MODEL_PATH,
+        map_location=device,
+    )
+
+    model.load_state_dict(state_dict)
     model.eval()
 
     return model, device
 
 
-def get_image_transform(): # Create the preprocessing pipeline used before prediction.
-    return T.Compose([ # Torchvision transform pipeline for resizing, converting to tensor, and normalizing grayscale MRI images.
+def get_image_transform():
+    return T.Compose([
         T.Resize(IMAGE_SIZE),
         T.ToTensor(),
-        T.Normalize(mean=[0.5], std=[0.5])
+        T.Normalize(mean=[0.5], std=[0.5]),
     ])
 
 
-def postprocess_mask(mask: np.ndarray, min_area: int = 80) -> np.ndarray: # Clean a predicted binary mask after model inference.
-    """
-    The function:
-    - converts the mask to image scale
-    - applies median blurring to reduce small noise
-    - removes connected regions smaller than a chosen minimum area
-    """
-
+def postprocess_mask(mask: np.ndarray, min_area: int = 80) -> np.ndarray:
     mask = (mask * 255).astype(np.uint8)
-
-    # Smooth small isolated noisy pixels
     mask = cv2.medianBlur(mask, 3)
 
-    # Find separate connected regions in the mask
     num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(
         mask,
-        connectivity=8
+        connectivity=8,
     )
 
     cleaned = np.zeros_like(mask)
 
-    # Keep only regions large enough to be considered useful detections
     for label in range(1, num_labels):
         area = stats[label, cv2.CC_STAT_AREA]
-
         if area >= min_area:
             cleaned[labels == label] = 255
 
     return (cleaned > 0).astype(np.uint8)
 
-def get_best_threshold(default=0.3):
-    """
-    Returns the best saved 2D threshold if available.
-    Falls back to 0.3 if metrics file is missing.
-    """
-    import os
-    import json
 
-    metrics_path = "best_model/best_metrics.json"
-
-    if not os.path.exists(metrics_path):
+def get_best_threshold(default=0.30):
+    if not os.path.exists(METRICS_PATH):
         return default
 
     try:
-        with open(metrics_path, "r") as f:
-            metrics = json.load(f)
+        with open(METRICS_PATH, "r") as file:
+            metrics = json.load(file)
 
         return float(
-            metrics.get("Threshold",
-            metrics.get("threshold",
-            metrics.get("best_threshold", default)))
+            metrics.get(
+                "Threshold",
+                metrics.get(
+                    "threshold",
+                    metrics.get("best_threshold", default),
+                ),
+            )
         )
     except Exception:
         return default
 
-def predict_mask(image_path, threshold=0.35, min_area=80): # Predict a binary tumor mask from one MRI image.
-    """
-    Returns:
-        A tuple containing:
-        - resized MRI image as a PIL image
-        - cleaned binary tumor mask as a NumPy array
-    """
+
+def predict_mask(image_path, threshold=None, min_area=80):
+    if threshold is None:
+        threshold = get_best_threshold()
 
     model, device = load_model()
     transform = get_image_transform()
@@ -113,31 +114,17 @@ def predict_mask(image_path, threshold=0.35, min_area=80): # Predict a binary tu
 
     with torch.no_grad():
         output = model(image_tensor)
-        prob = torch.sigmoid(output).squeeze().cpu().numpy()
+        probability = torch.sigmoid(output).squeeze().cpu().numpy()
 
-    print("Prediction min/max:", float(prob.min()), float(prob.max()))
-
-    candidate = (prob > threshold).astype(np.uint8)
+    candidate = (probability > threshold).astype(np.uint8)
     final_mask = postprocess_mask(candidate, min_area=min_area)
-
-    print("Using threshold:", threshold)
-    print("Mask pixels:", int(final_mask.sum()))
 
     return resized, final_mask
 
 
-def create_overlay(image_pil, mask, overlay_alpha=0.35): # Create a red tumor overlay on top of an MRI image.
-    """
-    Returns:
-        A tuple containing:
-        - MRI image with red tumor overlay
-        - black-and-white tumor mask image
-    """
-
+def create_overlay(image_pil, mask, overlay_alpha=0.35):
     image_rgb = np.array(image_pil.convert("RGB"))
-    overlay = image_rgb.copy()
 
-    # Create a red image layer used only where the mask is positive
     red_layer = np.zeros_like(image_rgb)
     red_layer[:, :, 0] = 255
 
@@ -145,35 +132,27 @@ def create_overlay(image_pil, mask, overlay_alpha=0.35): # Create a red tumor ov
 
     overlay = np.where(
         mask_3d == 1,
-        (1 - overlay_alpha) * overlay + overlay_alpha * red_layer,
-        overlay
+        (1 - overlay_alpha) * image_rgb + overlay_alpha * red_layer,
+        image_rgb,
     )
 
     overlay = overlay.astype(np.uint8)
 
     return (
         Image.fromarray(overlay),
-        Image.fromarray((mask * 255).astype(np.uint8))
+        Image.fromarray((mask * 255).astype(np.uint8)),
     )
 
 
-def predict_with_gradcam( # Predict tumor segmentation results and generate a Grad-CAM explanation.
+def predict_with_gradcam(
     image_path,
-    threshold=0.35,
+    threshold=None,
     min_area=80,
     overlay_alpha=0.35,
-    gradcam_alpha=0.40
+    gradcam_alpha=0.40,
 ):
-    """
-    Returns:
-        A tuple containing:
-        - resized MRI image
-        - binary tumor mask array
-        - MRI image with segmentation overlay
-        - black-and-white mask image
-        - MRI image with Grad-CAM overlay
-        - Grad-CAM heatmap image
-    """
+    if threshold is None:
+        threshold = get_best_threshold()
 
     model, device = load_model()
     transform = get_image_transform()
@@ -183,31 +162,32 @@ def predict_with_gradcam( # Predict tumor segmentation results and generate a Gr
 
     image_tensor = transform(original).unsqueeze(0).to(device)
 
-    # Generate segmentation prediction
     with torch.no_grad():
         output = model(image_tensor)
-        prob = torch.sigmoid(output).squeeze().cpu().numpy()
+        probability = torch.sigmoid(output).squeeze().cpu().numpy()
 
-    final_mask = (prob > threshold).astype(np.uint8)
+    final_mask = (probability > threshold).astype(np.uint8)
     final_mask = postprocess_mask(final_mask, min_area=min_area)
 
-    # Use the second decoder block for Grad-CAM because it keeps more spatial detail than the lowest-resolution bottleneck layer
     target_layer = model.dec2.layers[3]
 
     gradcam = GradCAM(model, target_layer)
-    cam = gradcam.generate(image_tensor)
-    gradcam.remove_hooks()
+
+    try:
+        cam = gradcam.generate(image_tensor)
+    finally:
+        gradcam.remove_hooks()
 
     overlay, mask_only = create_overlay(
         resized,
         final_mask,
-        overlay_alpha=overlay_alpha
+        overlay_alpha=overlay_alpha,
     )
 
     gradcam_overlay, heatmap_only = create_gradcam_overlay(
         resized,
         cam,
-        heatmap_alpha=gradcam_alpha
+        heatmap_alpha=gradcam_alpha,
     )
 
     return (
@@ -216,5 +196,5 @@ def predict_with_gradcam( # Predict tumor segmentation results and generate a Gr
         overlay,
         mask_only,
         gradcam_overlay,
-        heatmap_only
+        heatmap_only,
     )

@@ -12,7 +12,13 @@ from PIL import Image
 from predict import predict_with_gradcam
 
 
-from full_volume_3d import MODALITY_NAMES, build_tumor_figure, predict_full_volume_npz
+from full_volume_3d import (
+    MODALITY_NAMES,
+    build_tumor_figure,
+    build_orthogonal_mri_figure,
+    generate_3d_gradcam,
+    predict_full_volume_npz,
+)
 # =========================
 # Page setup
 # =========================
@@ -27,12 +33,58 @@ st.set_page_config(
 # File paths
 # =========================
 
-BEST_METRICS_PATH = "best_model/best_metrics.json"
-BEST_HISTORY_PATH = "best_model/best_history.csv"
+# =========================
+# Experiment files
+# =========================
 
-BEST_METRICS_3D_PATH = "best_model_3d/best_attention_metrics_3d.json"
-BEST_HISTORY_3D_PATH = "best_model_3d/best_attention_history_3d.csv"
-BEST_MODEL_3D_PATH = "best_model_3d/best_attention_unet3d.pth"
+# 2D baseline experiment
+BASELINE_2D_METRICS = "best_model/best_metrics.json"
+BASELINE_2D_HISTORY = "best_model/best_history.csv"
+BASELINE_2D_MODEL = "best_model/best_unet.pth"
+
+# 2D multi-head-attention experiment
+ATTENTION_2D_METRICS = "best_model/best_attention_metrics_2d.json"
+ATTENTION_2D_HISTORY = "best_model/best_attention_history_2d.csv"
+ATTENTION_2D_MODEL = "best_model/best_attention_unet2d.pth"
+
+# 3D baseline experiment
+BASELINE_3D_METRICS = "best_model_3d/best_metrics_3d.json"
+BASELINE_3D_HISTORY = "best_model_3d/best_history_3d.csv"
+BASELINE_3D_MODEL = "best_model_3d/best_unet3d.pth"
+
+# 3D multi-head-attention experiment
+ATTENTION_3D_METRICS = "best_model_3d/best_attention_metrics_3d.json"
+ATTENTION_3D_HISTORY = "best_model_3d/best_attention_history_3d.csv"
+ATTENTION_3D_MODEL = "best_model_3d/best_attention_unet3d.pth"
+
+# Compatibility aliases used by the rest of the existing UI.
+# =========================
+# Experiment file paths
+# =========================
+
+BASELINE_2D_METRICS = "best_model/best_metrics.json"
+BASELINE_2D_HISTORY = "best_model/best_history.csv"
+BASELINE_2D_MODEL = "best_model/best_unet.pth"
+
+ATTENTION_2D_METRICS = "best_model/best_attention_metrics_2d.json"
+ATTENTION_2D_HISTORY = "best_model/best_attention_history_2d.csv"
+ATTENTION_2D_MODEL = "best_model/best_attention_unet2d.pth"
+
+BASELINE_3D_METRICS = "best_model_3d/best_metrics_3d.json"
+BASELINE_3D_HISTORY = "best_model_3d/best_history_3d.csv"
+BASELINE_3D_MODEL = "best_model_3d/best_unet3d.pth"
+
+ATTENTION_3D_METRICS = "best_model_3d/best_attention_metrics_3d.json"
+ATTENTION_3D_HISTORY = "best_model_3d/best_attention_history_3d.csv"
+ATTENTION_3D_MODEL = "best_model_3d/best_attention_unet3d.pth"
+
+BEST_METRICS_PATH = ATTENTION_2D_METRICS
+BEST_HISTORY_PATH = ATTENTION_2D_HISTORY
+
+BEST_METRICS_3D_PATH = ATTENTION_3D_METRICS
+BEST_HISTORY_3D_PATH = ATTENTION_3D_HISTORY
+BEST_MODEL_3D_PATH = ATTENTION_3D_MODEL
+
 
 
 SAMPLE_2D_DIR = "sample_data/2d"
@@ -56,6 +108,386 @@ def load_csv(path):
         return None
 
     return pd.read_csv(path)
+
+
+def metric_value(metrics, key):
+    # Safely read a numeric metric from a saved metrics JSON file.
+    if not metrics:
+        return None
+
+    value = metrics.get(key)
+    if value is None:
+        return None
+
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _first_metric(metrics, *keys):
+    for key in keys:
+        value = metric_value(metrics, key)
+        if value is not None:
+            return value
+    return None
+
+
+def render_experiment_card(title, architecture, metrics, model_path=None):
+    st.markdown(f"#### {title}")
+    st.caption(architecture)
+
+    if not metrics:
+        st.info("Experiment results are not available yet.")
+        if model_path and os.path.exists(model_path):
+            st.caption("Model checkpoint exists, but its metrics file is not available yet.")
+        return
+
+    dice = _first_metric(metrics, "Dice coefficient", "Best Dice", "best_dice", "Dice")
+    iou = _first_metric(metrics, "Mean IoU", "IoU", "iou")
+    precision = _first_metric(metrics, "Precision", "precision")
+    recall = _first_metric(metrics, "Recall / Sensitivity", "Recall", "recall")
+
+    c1, c2 = st.columns(2)
+
+    with c1:
+        st.metric("Dice", f"{dice:.4f}" if dice is not None else "—")
+        st.metric("Precision", f"{precision:.4f}" if precision is not None else "—")
+
+    with c2:
+        st.metric("IoU", f"{iou:.4f}" if iou is not None else "—")
+        st.metric("Recall", f"{recall:.4f}" if recall is not None else "—")
+
+    threshold = metrics.get("Threshold", None)
+    if threshold is not None:
+        st.caption(f"Evaluation threshold: {threshold}")
+
+    if model_path:
+        if os.path.exists(model_path):
+            st.caption(f"Checkpoint: `{model_path}`")
+        else:
+            st.caption(f"Expected checkpoint: `{model_path}`")
+
+
+def render_experiment_comparison(workflow):
+    # Read-only comparison; it does not change the inference model.
+    st.markdown("---")
+    st.markdown("### Model Experiments")
+    st.caption(
+        "Compare the original U-Net baseline with the multi-head-attention "
+        "experiment using saved validation results."
+    )
+
+    if workflow == "2D":
+        baseline_metrics = load_json(BASELINE_2D_METRICS)
+        attention_metrics = load_json(ATTENTION_2D_METRICS)
+
+        baseline_title = "Experiment A — Baseline"
+        baseline_architecture = "2D U-Net"
+        baseline_model = BASELINE_2D_MODEL
+
+        attention_title = "Experiment B — Multi-Head Attention"
+        attention_architecture = "2D U-Net + multi-head self-attention at the bottleneck"
+        attention_model = ATTENTION_2D_MODEL
+
+    elif workflow == "3D":
+        baseline_metrics = load_json(BASELINE_3D_METRICS)
+        attention_metrics = load_json(ATTENTION_3D_METRICS)
+
+        baseline_title = "Experiment A — Baseline"
+        baseline_architecture = "3D U-Net"
+        baseline_model = BASELINE_3D_MODEL
+
+        attention_title = "Experiment B — Multi-Head Attention"
+        attention_architecture = "3D U-Net + multi-head self-attention"
+        attention_model = ATTENTION_3D_MODEL
+
+    else:
+        raise ValueError(f"Unknown workflow: {workflow}")
+
+    left, right = st.columns(2)
+
+    with left:
+        render_experiment_card(
+            baseline_title,
+            baseline_architecture,
+            baseline_metrics,
+            model_path=baseline_model
+        )
+
+    with right:
+        render_experiment_card(
+            attention_title,
+            attention_architecture,
+            attention_metrics,
+            model_path=attention_model
+        )
+
+    baseline_dice = (
+        _first_metric(baseline_metrics, "Dice coefficient", "Best Dice", "best_dice", "Dice")
+        if baseline_metrics else None
+    )
+    attention_dice = (
+        _first_metric(attention_metrics, "Dice coefficient", "Best Dice", "best_dice", "Dice")
+        if attention_metrics else None
+    )
+
+    if baseline_dice is not None and attention_dice is not None:
+        difference = attention_dice - baseline_dice
+        st.markdown("##### Experiment conclusion")
+
+        if difference > 0:
+            st.success(
+                f"Multi-head attention improved validation Dice by "
+                f"{difference:+.4f} ({baseline_dice:.4f} → {attention_dice:.4f})."
+            )
+        elif difference < 0:
+            st.warning(
+                f"Multi-head attention scored {abs(difference):.4f} lower than the baseline "
+                f"({baseline_dice:.4f} → {attention_dice:.4f})."
+            )
+        else:
+            st.info(
+                f"Both experiments achieved the same saved Dice score: "
+                f"{baseline_dice:.4f}."
+            )
+
+    elif workflow == "2D" and attention_metrics is None:
+        st.info(
+            "The 2D attention experiment is not available here yet. "
+            "After training finishes, copy `best_attention_metrics_2d.json` "
+            "and `best_attention_unet2d.pth` into `best_model/`; "
+            "this comparison updates automatically."
+        )
+
+
+
+def _ui_metric(metrics, *keys):
+    if not metrics:
+        return None
+    for key in keys:
+        value = metrics.get(key)
+        if value is None:
+            continue
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _dice_column(history):
+    if history is None or history.empty:
+        return None
+    for name in ("val_dice", "val_dice_at_0.5"):
+        if name in history.columns:
+            return name
+    return None
+
+
+def _best_epoch_from_history(history):
+    column = _dice_column(history)
+    if history is None or history.empty or column is None:
+        return None
+
+    numeric = pd.to_numeric(history[column], errors="coerce")
+    if numeric.dropna().empty:
+        return None
+
+    index = numeric.idxmax()
+    try:
+        return int(history.loc[index, "epoch"])
+    except Exception:
+        return None
+
+
+def _render_current_metrics(metrics, history, dimension):
+    dice = _ui_metric(metrics, "Dice coefficient", "Best Dice", "best_dice", "Dice")
+    iou = _ui_metric(metrics, "Mean IoU", "IoU", "iou")
+    precision = _ui_metric(metrics, "Precision", "precision")
+    recall = _ui_metric(metrics, "Recall / Sensitivity", "Recall", "recall")
+
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        st.metric("Dice", f"{dice:.4f}" if dice is not None else "—")
+    with c2:
+        st.metric("IoU", f"{iou:.4f}" if iou is not None else "—")
+    with c3:
+        st.metric("Precision", f"{precision:.4f}" if precision is not None else "—")
+    with c4:
+        st.metric("Recall", f"{recall:.4f}" if recall is not None else "—")
+
+    best_epoch = None
+    if metrics:
+        try:
+            best_epoch = int(metrics.get("Epoch"))
+        except Exception:
+            best_epoch = None
+
+    if best_epoch is None:
+        best_epoch = _best_epoch_from_history(history)
+
+    if best_epoch is not None:
+        st.caption(f"Best epoch: {best_epoch}")
+
+    if history is None or history.empty:
+        st.info(f"No {dimension} training history is available yet.")
+        return
+
+    loss_columns = [
+        column for column in ("train_loss", "val_loss")
+        if column in history.columns
+    ]
+
+    if loss_columns:
+        st.markdown("#### Loss")
+        loss_data = history[["epoch"] + loss_columns].copy()
+        loss_data["epoch"] = pd.to_numeric(loss_data["epoch"], errors="coerce")
+        for column in loss_columns:
+            loss_data[column] = pd.to_numeric(loss_data[column], errors="coerce")
+        loss_data = loss_data.dropna(subset=["epoch"]).set_index("epoch")
+        st.line_chart(loss_data[loss_columns])
+
+    dice_column = _dice_column(history)
+    if dice_column:
+        st.markdown("#### Validation Dice")
+        dice_data = history[["epoch", dice_column]].copy()
+        dice_data["epoch"] = pd.to_numeric(dice_data["epoch"], errors="coerce")
+        dice_data[dice_column] = pd.to_numeric(
+            dice_data[dice_column], errors="coerce"
+        )
+        dice_data = (
+            dice_data
+            .dropna(subset=["epoch", dice_column])
+            .rename(columns={dice_column: "Validation Dice"})
+            .set_index("epoch")
+        )
+        if not dice_data.empty:
+            st.line_chart(dice_data)
+
+
+def _render_experiment_comparison(
+    baseline_metrics,
+    attention_metrics,
+    baseline_history,
+    attention_history,
+    dimension,
+):
+    specs = [
+        ("Dice", ("Dice coefficient", "Best Dice", "best_dice", "Dice")),
+        ("IoU", ("Mean IoU", "IoU", "iou")),
+        ("Precision", ("Precision", "precision")),
+        ("Recall", ("Recall / Sensitivity", "Recall", "recall")),
+    ]
+
+    rows = []
+    for label, keys in specs:
+        rows.append(
+            {
+                "Metric": label,
+                "Baseline": _ui_metric(baseline_metrics, *keys),
+                "Attention": _ui_metric(attention_metrics, *keys),
+            }
+        )
+
+    comparison = pd.DataFrame(rows).set_index("Metric")
+
+    left, right = st.columns(2)
+
+    with left:
+        st.markdown(f"#### Experiment 1: Baseline {dimension} U-Net")
+
+        b_dice = comparison.loc["Dice", "Baseline"]
+        b_iou = comparison.loc["IoU", "Baseline"]
+        b_precision = comparison.loc["Precision", "Baseline"]
+        b_recall = comparison.loc["Recall", "Baseline"]
+
+        st.metric("Dice", f"{b_dice:.4f}" if pd.notna(b_dice) else "—")
+        st.metric("IoU", f"{b_iou:.4f}" if pd.notna(b_iou) else "—")
+        st.metric(
+            "Precision",
+            f"{b_precision:.4f}" if pd.notna(b_precision) else "—",
+        )
+        st.metric(
+            "Recall",
+            f"{b_recall:.4f}" if pd.notna(b_recall) else "—",
+        )
+
+    with right:
+        st.markdown(
+            f"#### Experiment 2: {dimension} U-Net + Multi-Head Attention"
+        )
+
+        a_dice = comparison.loc["Dice", "Attention"]
+        a_iou = comparison.loc["IoU", "Attention"]
+        a_precision = comparison.loc["Precision", "Attention"]
+        a_recall = comparison.loc["Recall", "Attention"]
+
+        delta = None
+        if pd.notna(a_dice) and pd.notna(b_dice):
+            delta = f"{a_dice - b_dice:+.4f}"
+
+        st.metric(
+            "Dice",
+            f"{a_dice:.4f}" if pd.notna(a_dice) else "—",
+            delta=delta,
+        )
+        st.metric("IoU", f"{a_iou:.4f}" if pd.notna(a_iou) else "—")
+        st.metric(
+            "Precision",
+            f"{a_precision:.4f}" if pd.notna(a_precision) else "—",
+        )
+        st.metric(
+            "Recall",
+            f"{a_recall:.4f}" if pd.notna(a_recall) else "—",
+        )
+
+    valid = comparison.dropna(how="all")
+    if not valid.empty:
+        st.markdown("#### Validation Metric Comparison")
+        st.bar_chart(valid)
+
+    b_col = _dice_column(baseline_history)
+    a_col = _dice_column(attention_history)
+
+    if b_col and a_col:
+        b = baseline_history[["epoch", b_col]].copy()
+        a = attention_history[["epoch", a_col]].copy()
+
+        b["epoch"] = pd.to_numeric(b["epoch"], errors="coerce")
+        b["Baseline"] = pd.to_numeric(b[b_col], errors="coerce")
+
+        a["epoch"] = pd.to_numeric(a["epoch"], errors="coerce")
+        a["Attention"] = pd.to_numeric(a[a_col], errors="coerce")
+
+        merged = pd.merge(
+            b[["epoch", "Baseline"]],
+            a[["epoch", "Attention"]],
+            on="epoch",
+            how="outer",
+        ).sort_values("epoch")
+
+        merged = merged.dropna(subset=["epoch"]).set_index("epoch")
+
+        if not merged.empty:
+            st.markdown("#### Validation Dice Across Epochs")
+            st.line_chart(merged)
+
+    if pd.notna(b_dice) and pd.notna(a_dice):
+        difference = a_dice - b_dice
+
+        if difference > 0:
+            st.success(
+                f"Experiment 2 improved Dice by {difference:+.4f} "
+                f"and is used as the deployed {dimension} model."
+            )
+        elif difference < 0:
+            st.warning(
+                f"Experiment 2 scored {abs(difference):.4f} below the baseline."
+            )
+        else:
+            st.info("Both experiments achieved the same Dice score.")
+
 
 
 def find_latest_file(pattern):
@@ -861,14 +1293,14 @@ elif page == "2D Info":
 
     c1, c2, c3 = st.columns(3)
     with c1:
-        st.metric("Architecture", "U-Net")
+        st.metric("Architecture", "Attention U-Net")
     with c2:
         st.metric("Input", "2D grayscale MRI")
     with c3:
         st.metric("Best Dice", dice_text)
 
     st.markdown("""
-    This section is for single-slice MRI tumor segmentation.
+    This section uses the selected 2D attention U-Net for single-slice MRI tumor segmentation.
 
     - **Analysis:** upload a PNG/JPG MRI slice and generate prediction outputs
     - **Training:** view the saved 2D model performance and training curves
@@ -907,6 +1339,7 @@ elif page == "2D MRI Analysis":
     st.subheader("2D MRI Slice Analysis")
 
 
+
     uploaded_file = st.file_uploader(
         "Upload MRI Scan Image (PNG/JPG)",
         type=["png", "jpg", "jpeg"],
@@ -939,10 +1372,21 @@ elif page == "2D MRI Analysis":
                 "gradcam_overlay": image_to_png_bytes(gradcam_overlay)
             }
 
-        col1, col2, col3, col4 = st.columns(4)
+        st.markdown("### Grad-CAM")
+        grad_left, grad_center, grad_right = st.columns([1, 2, 1])
+
+        with grad_center:
+            st.image(
+                gradcam_overlay,
+                use_container_width=True,
+                caption="Model Attention Heatmap"
+            )
+
+        st.markdown("### Segmentation Views")
+        col1, col2, col3 = st.columns(3)
 
         with col1:
-            st.markdown("### Input Scan")
+            st.markdown("#### Input Scan")
             st.image(
                 resized_img,
                 use_container_width=True,
@@ -950,7 +1394,7 @@ elif page == "2D MRI Analysis":
             )
 
         with col2:
-            st.markdown("### Segmentation")
+            st.markdown("#### Segmentation")
             st.image(
                 overlay,
                 use_container_width=True,
@@ -958,19 +1402,11 @@ elif page == "2D MRI Analysis":
             )
 
         with col3:
-            st.markdown("### Tumor Mask")
+            st.markdown("#### Tumor Mask")
             st.image(
                 mask_only,
                 use_container_width=True,
                 caption="White: Predicted Tumor Pixels"
-            )
-
-        with col4:
-            st.markdown("### Grad-CAM")
-            st.image(
-                gradcam_overlay,
-                use_container_width=True,
-                caption="Model Attention Heatmap"
             )
 
         st.markdown("---")
@@ -1012,6 +1448,7 @@ elif page == "3D MRI Analysis":
     st.subheader("3D MRI Volume Analysis")
 
 
+
     uploaded_3d_file = st.file_uploader(
         "Upload 3D MRI volume (.NPZ)",
         type=["npz"],
@@ -1044,11 +1481,30 @@ elif page == "3D MRI Analysis":
 
         st.info(
             "Upload a .NPZ 3D MRI volume to generate a predicted tumor mask, "
-            "slice overlays and probability map."
+            "slice overlays, probability map, colored Grad-CAM, and interactive 3D views."
         )
 
     if "result_3d" in st.session_state:
         result = st.session_state["result_3d"]
+
+        with st.expander(
+            "🧠 Three-view MRI Viewer · Axial / Coronal / Sagittal",
+            expanded=False,
+        ):
+            st.caption(
+                "Open this section to inspect the MRI from three anatomical "
+                "directions with the predicted tumor overlaid in red."
+            )
+
+            orthogonal_figure = build_orthogonal_mri_figure(
+                result,
+                modality_index=modality_index,
+            )
+
+            st.plotly_chart(
+                orthogonal_figure,
+                use_container_width=True,
+            )
 
         suggested_slice, _, _ = get_representative_3d_indices(result["pred_mask"])
 
@@ -1146,6 +1602,67 @@ elif page == "3D MRI Analysis":
 
         st.markdown("---")
 
+        with st.expander(
+            "🔥 3D Grad-CAM Explanation",
+            expanded=False,
+        ):
+            st.caption(
+                "Generate a gradient-based explanation for the selected slice. "
+                "Blue indicates lower influence; yellow/red indicate stronger influence."
+            )
+
+            gradcam_key = (
+                f"{result['volume_id']}_{slice_index}_{modality_index}_"
+                f"{BEST_MODEL_3D_PATH}"
+            )
+
+            if st.button(
+                "Generate 3D Grad-CAM",
+                key=f"generate_3d_gradcam_{slice_index}_{modality_index}",
+            ):
+                with st.spinner("Generating 3D Grad-CAM..."):
+                    st.session_state["gradcam_3d"] = generate_3d_gradcam(
+                        result=result,
+                        model_path=BEST_MODEL_3D_PATH,
+                        device=get_device_3d(),
+                        selected_slice=slice_index,
+                        modality_index=modality_index,
+                        heatmap_alpha=0.42,
+                    )
+                    st.session_state["gradcam_3d_key"] = gradcam_key
+
+            if (
+                "gradcam_3d" in st.session_state
+                and st.session_state.get("gradcam_3d_key") == gradcam_key
+            ):
+                gradcam_result = st.session_state["gradcam_3d"]
+
+                _, heat_col, overlay_col, _ = st.columns([1, 2, 2, 1])
+
+                with heat_col:
+                    st.markdown("##### Heatmap")
+                    st.image(
+                        gradcam_result["heatmap_rgb"],
+                        use_container_width=True,
+                        caption="3D Grad-CAM",
+                    )
+
+                with overlay_col:
+                    st.markdown("##### Overlay")
+                    st.image(
+                        gradcam_result["overlay_rgb"],
+                        use_container_width=True,
+                        caption=f"Slice {slice_index}",
+                    )
+
+                st.caption(
+                    f"Architecture: {gradcam_result['architecture']} · "
+                    f"model window: slices {gradcam_result['window_start']}–"
+                    f"{gradcam_result['window_end'] - 1}"
+                )
+
+        st.markdown("---")
+
         tumor_voxels = int(result["pred_mask"].sum())
 
         if result.get("true_mask") is not None:
@@ -1190,246 +1707,88 @@ elif page == "3D MRI Analysis":
 elif page == "2D Training Progress":
     render_workflow_buttons("2D")
     st.markdown("---")
-    st.subheader("2D Training Progress")
+    st.subheader("2D Training")
 
-    history = load_csv(BEST_HISTORY_PATH)
-    best_metrics = load_json(BEST_METRICS_PATH)
+    current_tab, experiments_tab = st.tabs(
+        ["Current Training", "Experiments"]
+    )
 
-    if history is not None:
-        history_display = history.copy()
-        history_display["train_loss"] = history_display["train_loss"].round(4)
-        history_display["val_loss"] = history_display["val_loss"].round(4)
-        history_display["val_dice"] = history_display["val_dice"].round(4)
+    attention_metrics_2d = load_json(ATTENTION_2D_METRICS)
+    attention_history_2d = load_csv(ATTENTION_2D_HISTORY)
+    baseline_metrics_2d = load_json(BASELINE_2D_METRICS)
+    baseline_history_2d = load_csv(BASELINE_2D_HISTORY)
 
-        best_dice = history["val_dice"].max()
-        best_epoch = history.loc[history["val_dice"].idxmax(), "epoch"]
-
-        c1, c2, c3 = st.columns(3)
-
-        with c1:
-            st.metric("Best Validation Dice", f"{best_dice:.4f}")
-
-        with c2:
-            st.metric("Best Epoch", int(best_epoch))
-
-        with c3:
-            st.metric("Final Training Loss", f"{history['train_loss'].iloc[-1]:.4f}")
-
-        st.markdown("---")
-        st.markdown("### Best 2D Model Metrics")
-
-        if best_metrics is not None:
-            metrics_table = pd.DataFrame(
-                [
-                    {
-                        "Metric": "Validation Loss",
-                        "Value": round(best_metrics.get("Validation loss", 0), 4)
-                    },
-                    {
-                        "Metric": "Dice Coefficient",
-                        "Value": round(best_metrics.get("Dice coefficient", 0), 4)
-                    },
-                    {
-                        "Metric": "Mean IoU",
-                        "Value": round(best_metrics.get("Mean IoU", 0), 4)
-                    },
-                    {
-                        "Metric": "Precision",
-                        "Value": round(best_metrics.get("Precision", 0), 4)
-                    },
-                    {
-                        "Metric": "Recall / Sensitivity",
-                        "Value": round(best_metrics.get("Recall / Sensitivity", 0), 4)
-                    },
-                    {
-                        "Metric": "Best Epoch",
-                        "Value": int(best_metrics.get("Epoch", best_epoch))
-                    },
-                    {
-                        "Metric": "Threshold",
-                        "Value": best_metrics.get("Threshold", "N/A")
-                    }
-                ]
-            )
-
-            st.dataframe(
-                metrics_table,
-                use_container_width=True,
-                hide_index=True
-            )
-
-            run_folder = best_metrics.get("Run folder", None)
-            if run_folder is not None:
-                st.caption(f"Best model source: {run_folder}")
-
-        else:
-            st.warning("Best metrics file not found: best_model/best_metrics.json")
-
-        st.markdown("---")
-
-        st.markdown("### 2D Loss During Training")
-        loss_chart = history.set_index("epoch")[["train_loss", "val_loss"]]
-        st.line_chart(loss_chart)
-
-        st.markdown("### 2D Validation Dice Score")
-        dice_chart = history.set_index("epoch")[["val_dice"]]
-        st.line_chart(dice_chart)
-
-    else:
-        st.info(
-            "No best 2D training history found yet. Expected file: "
-            "best_model/best_history.csv"
+    with current_tab:
+        st.markdown("### Deployed 2D Model")
+        st.caption(
+            "Experiment 2 · 2D U-Net + Multi-Head Attention. "
+            "This model is used by the 2D Analysis page."
         )
 
+        if attention_metrics_2d is not None:
+            _render_current_metrics(
+                attention_metrics_2d,
+                attention_history_2d,
+                "2D",
+            )
+        else:
+            st.warning(
+                "Attention metrics are not available yet: "
+                "`best_model/best_attention_metrics_2d.json`"
+            )
+
+    with experiments_tab:
+        _render_experiment_comparison(
+            baseline_metrics_2d,
+            attention_metrics_2d,
+            baseline_history_2d,
+            attention_history_2d,
+            "2D",
+        )
 
 # =========================
 # Page 4: 3D Training Progress
 # =========================
-
 elif page == "3D Training Progress":
     render_workflow_buttons("3D")
     st.markdown("---")
-    st.subheader("3D Training Progress")
+    st.subheader("3D Training")
 
-    latest_3d_metrics_path = find_latest_file("runs_3d/run_3d_*/metrics_3d.json")
-    latest_3d_history_path = find_latest_file("runs_3d/run_3d_*/history_3d.csv")
+    current_tab, experiments_tab = st.tabs(
+        ["Current Training", "Experiments"]
+    )
 
-    metrics_3d = load_json(BEST_METRICS_3D_PATH)
-    metrics_source = BEST_METRICS_3D_PATH
+    attention_metrics_3d = load_json(ATTENTION_3D_METRICS)
+    attention_history_3d = load_csv(ATTENTION_3D_HISTORY)
+    baseline_metrics_3d = load_json(BASELINE_3D_METRICS)
+    baseline_history_3d = load_csv(BASELINE_3D_HISTORY)
 
-    if metrics_3d is None and latest_3d_metrics_path is not None:
-        metrics_3d = load_json(latest_3d_metrics_path)
-        metrics_source = latest_3d_metrics_path
-
-    history_3d = load_csv(BEST_HISTORY_3D_PATH)
-    history_source = BEST_HISTORY_3D_PATH
-
-    if history_3d is None and latest_3d_history_path is not None:
-        history_3d = load_csv(latest_3d_history_path)
-        history_source = latest_3d_history_path
-
-    dice_column = None
-    if history_3d is not None:
-        if "val_dice" in history_3d.columns:
-            dice_column = "val_dice"
-        elif "val_dice_at_0.5" in history_3d.columns:
-            dice_column = "val_dice_at_0.5"
-
-    best_epoch = int(metrics_3d.get("Epoch", 0)) if metrics_3d is not None else 0
-    best_val_loss = None
-
-    if history_3d is not None and not history_3d.empty and "val_loss" in history_3d.columns:
-        matching_row = history_3d.loc[history_3d["epoch"] == best_epoch]
-
-        if not matching_row.empty:
-            best_val_loss = float(matching_row["val_loss"].iloc[0])
-        elif dice_column is not None:
-            best_row_index = history_3d[dice_column].idxmax()
-            best_epoch = int(history_3d.loc[best_row_index, "epoch"])
-            best_val_loss = float(history_3d.loc[best_row_index, "val_loss"])
-        else:
-            best_val_loss = float(history_3d["val_loss"].iloc[-1])
-
-    if metrics_3d is not None:
-        st.caption(f"3D metrics source: {metrics_source}")
-
-        c1, c2, c3 = st.columns(3)
-
-        with c1:
-            st.metric("Best 3D Dice", f"{metrics_3d.get('Dice coefficient', 0):.4f}")
-
-        with c2:
-            st.metric("Best Epoch", best_epoch)
-
-        with c3:
-            st.metric(
-                "Validation Loss",
-                f"{best_val_loss:.4f}" if best_val_loss is not None else "N/A"
-            )
-
-        st.markdown("---")
-        st.markdown("### 3D Model Metrics")
-
-        metrics_table_3d = pd.DataFrame(
-            [
-                {"Metric": "Validation Loss", "Value": round(best_val_loss, 4) if best_val_loss is not None else "N/A"},
-                {"Metric": "Dice Coefficient", "Value": round(metrics_3d.get("Dice coefficient", 0), 4)},
-                {"Metric": "Mean IoU", "Value": round(metrics_3d.get("Mean IoU", 0), 4)},
-                {"Metric": "Precision", "Value": round(metrics_3d.get("Precision", 0), 4)},
-                {"Metric": "Recall / Sensitivity", "Value": round(metrics_3d.get("Recall / Sensitivity", 0), 4)},
-                {"Metric": "Threshold", "Value": metrics_3d.get("Threshold", "N/A")},
-                {"Metric": "Depth", "Value": metrics_3d.get("Depth", "N/A")},
-                {"Metric": "Image Size", "Value": str(metrics_3d.get("Image size", "N/A"))},
-            ]
+    with current_tab:
+        st.markdown("### Deployed 3D Model")
+        st.caption(
+            "Experiment 2 · 3D U-Net + Multi-Head Attention. "
+            "This model is used by the 3D Analysis page."
         )
 
-        st.dataframe(metrics_table_3d, use_container_width=True, hide_index=True)
-
-        run_folder = metrics_3d.get("Run folder", None)
-        if run_folder is not None:
-            st.caption(f"Best model source: {run_folder}")
-    else:
-        st.warning(
-            "No 3D metrics found yet. Expected either "
-            "best_model_3d/best_metrics_3d.json or latest run metrics."
-        )
-
-    if history_3d is not None and not history_3d.empty:
-        st.markdown("---")
-        st.caption(f"3D history source: {history_source}")
-
-        loss_columns = [
-            column for column in ["train_loss", "val_loss"]
-            if column in history_3d.columns
-        ]
-
-        if loss_columns:
-            st.markdown("### 3D Loss During Training")
-            st.line_chart(history_3d.set_index("epoch")[loss_columns])
-
-        if dice_column is not None:
-            st.markdown("### 3D Validation Dice")
-
-            dice_chart_3d = history_3d[["epoch", dice_column]].copy()
-            dice_chart_3d["epoch"] = pd.to_numeric(
-                dice_chart_3d["epoch"],
-                errors="coerce"
+        if attention_metrics_3d is not None:
+            _render_current_metrics(
+                attention_metrics_3d,
+                attention_history_3d,
+                "3D",
             )
-            dice_chart_3d[dice_column] = pd.to_numeric(
-                dice_chart_3d[dice_column],
-                errors="coerce"
-            )
-            dice_chart_3d = dice_chart_3d.dropna(
-                subset=["epoch", dice_column]
-            ).sort_values("epoch")
-
-            if not dice_chart_3d.empty:
-                dice_chart_3d = dice_chart_3d.rename(
-                    columns={dice_column: "Validation Dice"}
-                )
-
-                st.line_chart(
-                    dice_chart_3d,
-                    x="epoch",
-                    y="Validation Dice"
-                )
-
-                st.caption(
-                    f"Showing {len(dice_chart_3d)} recorded epochs. "
-                    f"Best displayed Dice: "
-                    f"{dice_chart_3d['Validation Dice'].max():.4f}"
-                )
-            else:
-                st.warning(
-                    "The validation Dice column exists, but it contains no "
-                    "numeric values that can be plotted."
-                )
         else:
-            st.warning("The 3D history file does not contain a validation Dice column.")
-    else:
-        st.info(
-            "No best 3D history file found yet. This is okay if your quick run "
-            "did not update best_model_3d."
+            st.warning(
+                "Attention metrics are not available yet: "
+                "`best_model_3d/best_attention_metrics_3d.json`"
+            )
+
+    with experiments_tab:
+        _render_experiment_comparison(
+            baseline_metrics_3d,
+            attention_metrics_3d,
+            baseline_history_3d,
+            attention_history_3d,
+            "3D",
         )
 
 # Sidebar export buttons are rendered after page content so they update immediately

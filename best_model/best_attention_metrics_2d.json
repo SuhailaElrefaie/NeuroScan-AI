@@ -1,0 +1,12 @@
+{
+    "Dice coefficient": 0.8820809214910275,
+    "Mean IoU": 0.7890382572837965,
+    "Precision": 0.8760402142973394,
+    "Recall / Sensitivity": 0.8882055141192626,
+    "Threshold": 0.3,
+    "Architecture": "2D U-Net + Multi-Head Attention",
+    "Attention heads": 8,
+    "Training images": 3147,
+    "Validation images": 786,
+    "Best Dice": 0.8820809214910275
+}

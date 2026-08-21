@@ -5,116 +5,130 @@ import torch.nn.functional as F
 from PIL import Image
 
 
-class GradCAM: # Generate a Grad-CAM heatmap for a segmentation model.
-    """
-    The class stores:
-    - activations from a chosen convolutional layer
-    - gradients flowing back through that layer
-
-    These are combined to produce a heatmap of the regions that influenced the model prediction.
-    """
+class GradCAM:
+    """Grad-CAM helper for both 2D and 3D segmentation models."""
 
     def __init__(self, model, target_layer):
         self.model = model
         self.target_layer = target_layer
-
         self.activations = None
         self.gradients = None
+        self.forward_hook = target_layer.register_forward_hook(self.save_activation)
+        self.backward_hook = target_layer.register_full_backward_hook(self.save_gradient)
 
-        # Hooks save the layer output and its gradients during prediction
-        self.forward_hook = target_layer.register_forward_hook(
-            self.save_activation
-        )
-        self.backward_hook = target_layer.register_full_backward_hook(
-            self.save_gradient
-        )
-
-    def save_activation(self, module, input, output): # Save feature maps produced during the forward pass.
+    def save_activation(self, module, inputs, output):
         self.activations = output
 
-    def save_gradient(self, module, grad_input, grad_output): # Save gradients produced during the backward pass.
+    def save_gradient(self, module, grad_input, grad_output):
         self.gradients = grad_output[0]
 
-    def generate(self, input_tensor): # Generate a normalized Grad-CAM heatmap for one input image.
-        """
-        For segmentation, the heatmap target is based on the model's soft tumor
-        prediction scores across the image. This keeps the explanation focused
-        on likely tumor regions without forcing it into a very small hard mask.
+    def generate(self, input_tensor):
+        self.model.zero_grad(set_to_none=True)
 
-        Returns:
-            A 2D NumPy array containing heatmap values between 0 and 1.
-        """
-
-        self.model.zero_grad()
-
-        # Run a forward pass with gradients enabled
         output = self.model(input_tensor)
         probability_map = torch.sigmoid(output)
-
-        # Use the soft tumor prediction as the explanation target
         target = (output * probability_map).sum()
         target.backward()
 
-        gradients = self.gradients
+        if self.activations is None or self.gradients is None:
+            raise RuntimeError("Grad-CAM did not capture activations/gradients.")
+
         activations = self.activations
+        gradients = self.gradients
 
-        # Average gradients over the spatial dimensions to obtain channel weights
-        weights = gradients.mean(dim=(2, 3), keepdim=True)
+        if activations.ndim == 4:
+            spatial_dims = (2, 3)
+            interpolation_mode = "bilinear"
+        elif activations.ndim == 5:
+            spatial_dims = (2, 3, 4)
+            interpolation_mode = "trilinear"
+        else:
+            raise ValueError(
+                f"Unsupported activation shape: {tuple(activations.shape)}"
+            )
 
-        # Combine activation maps using the gradient-based weights
+        weights = gradients.mean(dim=spatial_dims, keepdim=True)
         cam = (weights * activations).sum(dim=1, keepdim=True)
-
-        # Keep only positive contributions
         cam = F.relu(cam)
 
-        # Resize the heatmap to match the input image size
         cam = F.interpolate(
             cam,
             size=input_tensor.shape[2:],
-            mode="bilinear",
-            align_corners=False
+            mode=interpolation_mode,
+            align_corners=False,
         )
 
-        cam = cam.squeeze().detach().cpu().numpy()
+        cam = (
+            cam.squeeze(0)
+            .squeeze(0)
+            .detach()
+            .cpu()
+            .numpy()
+            .astype(np.float32)
+        )
 
-        # Normalize values to the range 0 to 1
-        if cam.max() > cam.min():
-            cam = (cam - cam.min()) / (cam.max() - cam.min())
+        cam_min = float(cam.min())
+        cam_max = float(cam.max())
+
+        if cam_max > cam_min:
+            cam = (cam - cam_min) / (cam_max - cam_min)
         else:
-            cam = np.zeros_like(cam)
+            cam = np.zeros_like(cam, dtype=np.float32)
 
         return cam
 
-    def remove_hooks(self): # Remove the stored forward and backward hooks.
-        """
-        This prevents hooks from staying attached after the heatmap is created.
-        """
-        self.forward_hook.remove()
-        self.backward_hook.remove()
+    def remove_hooks(self):
+        if self.forward_hook is not None:
+            self.forward_hook.remove()
+            self.forward_hook = None
+
+        if self.backward_hook is not None:
+            self.backward_hook.remove()
+            self.backward_hook = None
 
 
-def create_gradcam_overlay(image_pil, cam, heatmap_alpha=0.40): # Create a colored Grad-CAM heatmap and overlay it on an MRI image.
-    """
-    Returns:
-        A tuple containing:
-        - the MRI image with the heatmap overlaid
-        - the heatmap image by itself
-    """
+def create_gradcam_overlay(image_pil, cam, heatmap_alpha=0.40):
+    """Create the same colored JET Grad-CAM style used by the 2D workflow."""
+
+    if not isinstance(image_pil, Image.Image):
+        image_pil = Image.fromarray(np.asarray(image_pil))
 
     image_rgb = np.array(image_pil.convert("RGB"))
+    cam = np.asarray(cam, dtype=np.float32)
 
-    # Convert the normalized heatmap into a colored OpenCV heatmap
-    heatmap = (cam * 255).astype(np.uint8)
-    heatmap = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)
-    heatmap = cv2.cvtColor(heatmap, cv2.COLOR_BGR2RGB)
+    if cam.ndim != 2:
+        raise ValueError(
+            "create_gradcam_overlay expects a 2D CAM slice. "
+            f"Received shape: {cam.shape}"
+        )
 
-    # Blend the original MRI image with the heatmap
-    overlay = cv2.addWeighted(
-        image_rgb,
-        1 - heatmap_alpha,
-        heatmap,
-        heatmap_alpha,
-        0
+    if cam.shape != image_rgb.shape[:2]:
+        cam = cv2.resize(
+            cam,
+            (image_rgb.shape[1], image_rgb.shape[0]),
+            interpolation=cv2.INTER_LINEAR,
+        )
+
+    cam = np.clip(cam, 0.0, 1.0)
+    heatmap_uint8 = (cam * 255).astype(np.uint8)
+
+    heatmap_bgr = cv2.applyColorMap(
+        heatmap_uint8,
+        cv2.COLORMAP_JET,
+    )
+    heatmap_rgb = cv2.cvtColor(
+        heatmap_bgr,
+        cv2.COLOR_BGR2RGB,
     )
 
-    return Image.fromarray(overlay), Image.fromarray(heatmap)
+    alpha = float(np.clip(heatmap_alpha, 0.0, 1.0))
+
+    overlay = cv2.addWeighted(
+        image_rgb,
+        1.0 - alpha,
+        heatmap_rgb,
+        alpha,
+        0,
+    )
+
+    return Image.fromarray(overlay), Image.fromarray(heatmap_rgb)
