@@ -422,8 +422,7 @@ def _render_experiment_comparison(
     valid = comparison.dropna(how="all")
     if not valid.empty:
         st.markdown("#### Validation Metric Comparison")
-        st.bar_chart(valid, height=500
-
+        st.bar_chart(valid, height=500)
     b_col = _dice_column(baseline_history)
     a_col = _dice_column(attention_history)
 
