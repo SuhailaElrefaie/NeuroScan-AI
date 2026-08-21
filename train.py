@@ -38,7 +38,7 @@ SEED = 42
 THRESHOLD = 0.3
 
 
-def dice_coefficient(preds, targets, smooth=1e-6): # Calculate Dice coefficient between predicted and true masks.
+def dice_coefficient(preds, targets, smooth=1e-6):
     preds = torch.sigmoid(preds)
     preds = (preds > THRESHOLD).float()
 
@@ -52,7 +52,7 @@ def dice_coefficient(preds, targets, smooth=1e-6): # Calculate Dice coefficient 
     )
 
 
-def dice_loss(preds, targets, smooth=1e-6): # Calculate Dice loss for segmentation training.
+def dice_loss(preds, targets, smooth=1e-6): 
     preds = torch.sigmoid(preds)
 
     preds = preds.view(preds.size(0), -1)
@@ -66,7 +66,7 @@ def dice_loss(preds, targets, smooth=1e-6): # Calculate Dice loss for segmentati
     return 1.0 - dice.mean()
 
 
-def combined_loss(preds, targets, device): # Combined loss: weighted BCE + Dice loss.
+def combined_loss(preds, targets, device): 
     pos_weight = torch.tensor([10.0], device=device)
 
     bce = nn.BCEWithLogitsLoss(pos_weight=pos_weight)(preds, targets)
@@ -75,7 +75,7 @@ def combined_loss(preds, targets, device): # Combined loss: weighted BCE + Dice 
     return bce + d_loss
 
 
-def get_confusion_counts(logits, masks, threshold=THRESHOLD): # Calculate TP, FP, FN, TN for binary segmentation.
+def get_confusion_counts(logits, masks, threshold=THRESHOLD):
     probs = torch.sigmoid(logits)
     preds = (probs > threshold).float()
     masks = (masks > 0.5).float()
@@ -88,7 +88,7 @@ def get_confusion_counts(logits, masks, threshold=THRESHOLD): # Calculate TP, FP
     return tp, fp, fn, tn
 
 
-def compute_metrics_from_counts(tp, fp, fn, tn, eps=1e-7): # Convert TP, FP, FN, TN into useful segmentation metrics.
+def compute_metrics_from_counts(tp, fp, fn, tn, eps=1e-7): 
     dice = (2 * tp) / (2 * tp + fp + fn + eps)
     iou = tp / (tp + fp + fn + eps)
     precision = tp / (tp + fp + eps)
@@ -102,7 +102,7 @@ def compute_metrics_from_counts(tp, fp, fn, tn, eps=1e-7): # Convert TP, FP, FN,
     }
 
 
-def get_device(): # Select the best available device.
+def get_device():
     if torch.cuda.is_available():
         return torch.device("cuda")
 
@@ -112,7 +112,7 @@ def get_device(): # Select the best available device.
     return torch.device("cpu")
 
 
-def make_run_folder(): # Create a unique folder for this training run.
+def make_run_folder():
     os.makedirs(RUNS_DIR, exist_ok=True)
     os.makedirs(BEST_DIR, exist_ok=True)
 
@@ -123,7 +123,7 @@ def make_run_folder(): # Create a unique folder for this training run.
     return run_dir
 
 
-def load_previous_best_dice(): #  Load the previous best Dice score if it exists.
+def load_previous_best_dice(): 
     if not os.path.exists(BEST_METRICS_PATH):
         return 0.0
 
@@ -133,12 +133,12 @@ def load_previous_best_dice(): #  Load the previous best Dice score if it exists
     return float(metrics.get("Dice coefficient", 0.0))
 
 
-def save_json(path, data): # Save dictionary as JSON.
+def save_json(path, data): 
     with open(path, "w") as file:
         json.dump(data, file, indent=4)
 
 
-def main(): # Train the U-Net segmentation model.
+def main(): 
     torch.manual_seed(SEED)
 
     device = get_device()
