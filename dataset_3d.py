@@ -15,7 +15,6 @@ _FILENAME_RE = re.compile(r"volume_(\d+)_slice_(\d+)\.h5$")
 
 
 def discover_volumes(h5_dir: str | Path) -> Dict[int, List[Tuple[int, Path]]]:
-    """Return {volume_id: [(slice_id, path), ...]} sorted by slice id."""
     root = Path(h5_dir)
     if not root.exists():
         raise FileNotFoundError(f"3D dataset folder not found: {root.resolve()}")
@@ -42,7 +41,6 @@ def split_volume_ids(
     val_fraction: float = 0.20,
     seed: int = 42,
 ) -> Tuple[List[int], List[int]]:
-    """Patient-level split. No slices from one patient can leak across splits."""
     ids = list(sorted(volume_ids))
     rng = random.Random(seed)
     rng.shuffle(ids)
@@ -78,7 +76,6 @@ def _read_image_and_mask(path: Path) -> Tuple[np.ndarray, np.ndarray]:
     if image.ndim != 3:
         raise ValueError(f"Unsupported image shape {image.shape} in {path}")
 
-    # Expected H5 format is [H, W, C]. Convert to [C, H, W].
     if image.shape[-1] <= 8:
         image = np.moveaxis(image, -1, 0)
     elif image.shape[0] > 8:
@@ -95,11 +92,6 @@ def _read_image_and_mask(path: Path) -> Tuple[np.ndarray, np.ndarray]:
 
 
 def normalize_modalities_nonzero(image: np.ndarray) -> np.ndarray:
-    """
-    Z-score each MRI modality separately, using only non-zero brain voxels.
-    Background remains zero.
-    image shape: [C, D, H, W]
-    """
     image = np.nan_to_num(image.astype(np.float32), copy=False)
     result = np.zeros_like(image, dtype=np.float32)
 
