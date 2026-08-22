@@ -27,48 +27,26 @@ from full_volume_3d import (
     _crop_and_resize_probability,
 )
 
-# =========================
-# Page setup
-# =========================
-
 st.set_page_config(
     page_title="NeuroScan AI | Tumor Segmentation",
     layout="wide"
 )
 
-
-# =========================
-# File paths
-# =========================
-
-# =========================
-# Experiment files
-# =========================
-
-# 2D baseline experiment
 BASELINE_2D_METRICS = "best_model/best_metrics.json"
 BASELINE_2D_HISTORY = "best_model/best_history.csv"
 BASELINE_2D_MODEL = "best_model/best_unet.pth"
 
-# 2D multi-head-attention experiment
 ATTENTION_2D_METRICS = "best_model/best_attention_metrics_2d.json"
 ATTENTION_2D_HISTORY = "best_model/best_attention_history_2d.csv"
 ATTENTION_2D_MODEL = "best_model/best_attention_unet2d.pth"
 
-# 3D baseline experiment
 BASELINE_3D_METRICS = "best_model_3d/best_metrics_3d.json"
 BASELINE_3D_HISTORY = "best_model_3d/best_history_3d.csv"
 BASELINE_3D_MODEL = "best_model_3d/best_unet3d.pth"
 
-# 3D multi-head-attention experiment
 ATTENTION_3D_METRICS = "best_model_3d/best_attention_metrics_3d.json"
 ATTENTION_3D_HISTORY = "best_model_3d/best_attention_history_3d.csv"
 ATTENTION_3D_MODEL = "best_model_3d/best_attention_unet3d.pth"
-
-# Compatibility aliases used by the rest of the existing UI.
-# =========================
-# Experiment file paths
-# =========================
 
 BASELINE_2D_METRICS = "best_model/best_metrics.json"
 BASELINE_2D_HISTORY = "best_model/best_history.csv"
@@ -99,10 +77,6 @@ SAMPLE_2D_DIR = "sample_data/2d"
 SAMPLE_3D_DIR = "sample_data/3d"
 
 
-# =========================
-# Helper functions
-# =========================
-
 def load_json(path):
     if not os.path.exists(path):
         return None
@@ -119,7 +93,6 @@ def load_csv(path):
 
 
 def metric_value(metrics, key):
-    # Safely read a numeric metric from a saved metrics JSON file.
     if not metrics:
         return None
 
@@ -178,7 +151,6 @@ def render_experiment_card(title, architecture, metrics, model_path=None):
 
 
 def render_experiment_comparison(workflow):
-    # Read-only comparison; it does not change the inference model.
     st.markdown("---")
     st.markdown("### Model Experiments")
     st.caption(
@@ -525,7 +497,6 @@ def read_file_bytes(path):
 
 
 def render_sample_folder_sidebar(folder, extensions, title, help_text, mime_type):
-    """Small sample-download folder shown in the analysis sidebar."""
     sample_files = get_sample_files(folder, extensions)
 
     with st.sidebar.expander(title, expanded=False):
@@ -552,7 +523,6 @@ def render_sample_folder_sidebar(folder, extensions, title, help_text, mime_type
 
 
 def render_export_2d_sidebar():
-    """Export buttons for the latest 2D prediction. Rendered after prediction so it updates immediately."""
     with st.sidebar.expander("Export 2D Results", expanded=False):
         if "export_2d" not in st.session_state:
             st.caption("Upload a 2D image first to export results.")
@@ -589,7 +559,6 @@ def render_export_2d_sidebar():
 
 
 def render_export_3d_sidebar():
-    """Export buttons for the latest selected 3D slice. Rendered after prediction so it updates immediately."""
     with st.sidebar.expander("Export 3D Slice Results", expanded=False):
         if "export_3d" not in st.session_state:
             st.caption("Upload a 3D volume first to export results.")
@@ -661,11 +630,6 @@ def image_to_png_bytes(image):
 
 
 def normalize_slice_for_display(slice_2d):
-    """Contrast-stretch MRI slices for display only.
-
-    This makes uploaded MRI views look cleaner in the web app. It does not
-    change the tensor sent into the model and does not affect Dice/metrics.
-    """
     slice_2d = np.asarray(slice_2d, dtype=np.float32)
     slice_2d = np.nan_to_num(slice_2d)
 
@@ -685,7 +649,6 @@ def normalize_slice_for_display(slice_2d):
 
 
 def resize_for_display(image, width=384, resample=None):
-    """Upscale small 3D model inputs so Streamlit does not stretch them badly."""
     if image is None:
         return None
 
@@ -753,7 +716,6 @@ def get_3d_display_slices(result, slice_index, modality_index=0, overlay_alpha=0
 
 
 def get_representative_3d_indices(mask_3d):
-    """Find useful axial/coronal/sagittal indices from the prediction mask."""
     mask_3d = np.asarray(mask_3d)
     depth, height, width = mask_3d.shape
 
@@ -783,7 +745,6 @@ def get_device_3d():
 
 
 def get_3d_model_path():
-    """Return the deployed 3D model only; do not silently load legacy runs."""
     if os.path.exists(BEST_MODEL_3D_PATH):
         return BEST_MODEL_3D_PATH
     return None
@@ -805,7 +766,6 @@ def predict_uploaded_3d_npz(uploaded_file, threshold=0.55):
     )
 
 def build_full_gradcam_volume(result, gradcam_result):
-    """Place the windowed Grad-CAM volume back into full MRI depth."""
     image = np.asarray(result["image"])
 
     if image.ndim == 4 and image.shape[0] == 4:
@@ -866,7 +826,6 @@ def _add_gradcam_isosurface(
     opacity,
     name,
 ):
-    """Add one Grad-CAM activation level as a smooth 3D surface."""
     volume = np.asarray(volume, dtype=np.float32)
     volume = ndi.gaussian_filter(volume, sigma=0.65)
 
@@ -930,7 +889,6 @@ def build_combined_tumor_gradcam_figure(
     show_tumour=True,
     show_gradcam=True,
 ):
-    """Use the project's GitHub brain surface and overlay selected 3D layers."""
     image_4d = _canonicalise_image(
         np.asarray(result["image"])
     )
@@ -949,7 +907,6 @@ def build_combined_tumor_gradcam_figure(
 
     figure = go.Figure()
 
-    # This is the exact existing GitHub brain renderer.
     bbox, _crop_shape, display_shape = _add_brain_surface(
         figure,
         image_4d,
@@ -1006,8 +963,6 @@ def build_combined_tumor_gradcam_figure(
                 ]
 
                 if positive.size > 12:
-                    # Grad-CAM is continuous, so show three levels instead of
-                    # pretending it has one exact segmentation boundary.
                     low_level = float(
                         np.clip(
                             np.percentile(
@@ -1106,10 +1061,6 @@ def build_combined_tumor_gradcam_figure(
 
     return figure
 
-
-# =========================
-# Styling
-# =========================
 
 st.markdown(
     """
@@ -1241,10 +1192,6 @@ st.markdown(
 )
 
 
-# =========================
-# Initial page state
-# =========================
-
 if "active_page" not in st.session_state:
     st.session_state["active_page"] = "Home"
 
@@ -1256,10 +1203,6 @@ if "upload_reset_counter" not in st.session_state:
 
 page = st.session_state["active_page"]
 
-
-# =========================
-# Header
-# =========================
 
 if page != "Home":
     top_home_col, top_space = st.columns([1, 7])
@@ -1307,13 +1250,6 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-# =========================
-# Main-page navigation
-# =========================
-
-# Pages are now controlled from the main screen instead of two separate
-# sidebar radio groups. The rest of the UI is kept the same.
-
 if "active_page" not in st.session_state:
     st.session_state["active_page"] = "Home"
 
@@ -1329,7 +1265,6 @@ def go_to_page(page_name):
 
 
 def render_workflow_buttons(workflow):
-    """Show Info / Analysis / Training buttons for one workflow."""
     if workflow == "2D":
         info_page = "2D Info"
         analysis_page = "2D MRI Analysis"
@@ -1352,7 +1287,6 @@ def render_workflow_buttons(workflow):
 
 
 def render_home_button_bottom():
-    """Show a small Home button at the bottom-right of non-home pages."""
     st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
     left_space, home_col = st.columns([6, 1])
 
@@ -1367,8 +1301,6 @@ def render_home_button_bottom():
 
 page = st.session_state["active_page"]
 
-# Hide the sidebar everywhere except the two Analysis pages.
-# The sidebar is only used for analysis controls/export buttons.
 if page not in ["2D MRI Analysis", "3D MRI Analysis"]:
     st.markdown(
         """
@@ -1387,7 +1319,6 @@ if page not in ["2D MRI Analysis", "3D MRI Analysis"]:
         unsafe_allow_html=True
     )
 
-# Reset uploaded files and stored results when changing pages
 if page != st.session_state["current_page"]:
     keys_to_clear = [
         "result_3d",
@@ -1405,10 +1336,6 @@ if page != st.session_state["current_page"]:
 
     st.session_state["upload_reset_counter"] += 1
     st.session_state["current_page"] = page
-
-# =========================
-# Sidebar controls
-# =========================
 
 if page == "2D MRI Analysis":
     render_sample_folder_sidebar(
@@ -1492,9 +1419,6 @@ elif page == "3D MRI Analysis":
         )
 
 
-# =========================
-# Model metric summary values
-# =========================
 
 best_metrics = load_json(BEST_METRICS_PATH)
 best_metrics_3d = load_json(BEST_METRICS_3D_PATH)
@@ -1516,9 +1440,6 @@ if best_metrics_3d is not None:
 else:
     dice_3d_text = "No best model yet"
 
-# =========================
-# Home / workflow pages
-# =========================
 
 if page == "Home":
     st.subheader("How to use this website")
@@ -1665,10 +1586,6 @@ elif page == "3D Info":
     """)
 
 
-# =========================
-# Page 1: 2D MRI Analysis
-# =========================
-
 elif page == "2D MRI Analysis":
     render_workflow_buttons("2D")
     st.markdown("---")
@@ -1773,10 +1690,6 @@ elif page == "2D MRI Analysis":
             "binary tumor mask, and Grad-CAM explanation."
         )
 
-
-# =========================
-# Page 2: 3D MRI Analysis
-# =========================
 
 elif page == "3D MRI Analysis":
     render_workflow_buttons("3D")
@@ -2071,9 +1984,6 @@ elif page == "3D MRI Analysis":
             )
 
 
-# =========================
-# Page 3: 2D Training Progress
-# =========================
 
 elif page == "2D Training Progress":
     render_workflow_buttons("2D")
@@ -2117,9 +2027,6 @@ elif page == "2D Training Progress":
             "2D",
         )
 
-# =========================
-# Page 4: 3D Training Progress
-# =========================
 elif page == "3D Training Progress":
     render_workflow_buttons("3D")
     st.markdown("---")
@@ -2162,13 +2069,9 @@ elif page == "3D Training Progress":
             "3D",
         )
 
-# Sidebar export buttons are rendered after page content so they update immediately
-# after a new upload/prediction and never duplicate.
 if page == "2D MRI Analysis":
     st.sidebar.markdown("---")
     render_export_2d_sidebar()
 elif page == "3D MRI Analysis":
     st.sidebar.markdown("---")
     render_export_3d_sidebar()
-
-# Home navigation is shown at the top of every non-home page.
