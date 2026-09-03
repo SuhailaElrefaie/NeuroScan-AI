@@ -458,7 +458,6 @@ def main() -> None:
     if not best_checkpoint.exists():
         raise RuntimeError("Training ended without producing a checkpoint.")
 
-    # This checkpoint was created by this training process and is trusted.
     try:
         checkpoint = torch.load(
             best_checkpoint,
@@ -498,7 +497,6 @@ def main() -> None:
         "Run folder": str(run_dir),
     }
 
-    # Save plain state_dict so the existing app can load it directly.
     run_model_path = run_dir / "model_3d.pth"
     torch.save(model.state_dict(), run_model_path)
     save_json(run_dir / "metrics_3d.json", final_metrics)
