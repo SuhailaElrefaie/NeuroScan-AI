@@ -216,15 +216,6 @@ def render_experiment_comparison(workflow):
                 f"{baseline_dice:.4f}."
             )
 
-    elif workflow == "2D" and attention_metrics is None:
-        st.info(
-            "The 2D attention experiment is not available here yet. "
-            "After training finishes, copy `best_attention_metrics_2d.json` "
-            "and `best_attention_unet2d.pth` into `best_model/`; "
-            "this comparison updates automatically."
-        )
-
-
 
 def _ui_metric(metrics, *keys):
     if not metrics:
