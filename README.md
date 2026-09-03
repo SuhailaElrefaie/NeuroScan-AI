@@ -174,7 +174,6 @@ Learning rate:            2e-4
 | Threshold | 0.55 |
 | Best checkpoint epoch | 35 |
 
-The 3D result is an internal validation result using a patient-level split and full-depth overlapping validation windows. It is not an official hidden BraTS challenge score.
 
 ### 3D files
 
@@ -227,8 +226,6 @@ NeuroScan-AI/
 ├── sample_data/
 └── tools/
 ```
-
-> The 2D and 3D labels above are logical groupings. The source files remain in their existing repository locations so current imports and deployment paths continue to work.
 
 ---
 
