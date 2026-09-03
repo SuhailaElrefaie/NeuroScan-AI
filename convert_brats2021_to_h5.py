@@ -12,7 +12,6 @@ OUTPUT_ROOT = Path("archive/BraTS2021_h5/content/data")
 
 
 def normalize_volume(volume: np.ndarray) -> np.ndarray:
-    """Z-score non-zero brain voxels while keeping background exactly zero."""
     volume = np.nan_to_num(np.asarray(volume, dtype=np.float32))
     brain = volume != 0
     result = np.zeros_like(volume, dtype=np.float32)
@@ -92,7 +91,6 @@ def main() -> None:
         segmentation = nib.load(str(pick_file(subject_dir, "seg"))).get_fdata()
         mask = (segmentation > 0).astype(np.uint8)
 
-        # Channel order used throughout the project: FLAIR, T1, T1CE, T2.
         for slice_index in range(mask.shape[2]):
             image_slice = np.stack(
                 [
