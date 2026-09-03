@@ -12,23 +12,18 @@ from dataset import BrainTumorSegmentationDataset
 from models.unet import UNet
 
 
-# Dataset paths
 IMAGE_DIR = "Data/segmentation_task/train/images"
 MASK_DIR = "Data/segmentation_task/train/masks"
 
-# Output folders
 RUNS_DIR = "runs"
 BEST_DIR = "best_model"
 
-# Best model files
 BEST_MODEL_PATH = os.path.join(BEST_DIR, "best_unet.pth")
 BEST_METRICS_PATH = os.path.join(BEST_DIR, "best_metrics.json")
 BEST_HISTORY_PATH = os.path.join(BEST_DIR, "best_history.csv")
 
-# Safe backup of your 0.8397 model
 BACKUP_MODEL_PATH = os.path.join(BEST_DIR, "backup_08397.pth")
 
-# Training settings
 BATCH_SIZE = 2
 EPOCHS = 80
 LEARNING_RATE = 1e-4
