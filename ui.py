@@ -48,22 +48,6 @@ ATTENTION_3D_METRICS = "best_model_3d/best_attention_metrics_3d.json"
 ATTENTION_3D_HISTORY = "best_model_3d/best_attention_history_3d.csv"
 ATTENTION_3D_MODEL = "best_model_3d/best_attention_unet3d.pth"
 
-BASELINE_2D_METRICS = "best_model/best_metrics.json"
-BASELINE_2D_HISTORY = "best_model/best_history.csv"
-BASELINE_2D_MODEL = "best_model/best_unet.pth"
-
-ATTENTION_2D_METRICS = "best_model/best_attention_metrics_2d.json"
-ATTENTION_2D_HISTORY = "best_model/best_attention_history_2d.csv"
-ATTENTION_2D_MODEL = "best_model/best_attention_unet2d.pth"
-
-BASELINE_3D_METRICS = "best_model_3d/best_metrics_3d.json"
-BASELINE_3D_HISTORY = "best_model_3d/best_history_3d.csv"
-BASELINE_3D_MODEL = "best_model_3d/best_unet3d.pth"
-
-ATTENTION_3D_METRICS = "best_model_3d/best_attention_metrics_3d.json"
-ATTENTION_3D_HISTORY = "best_model_3d/best_attention_history_3d.csv"
-ATTENTION_3D_MODEL = "best_model_3d/best_attention_unet3d.pth"
-
 BEST_METRICS_PATH = ATTENTION_2D_METRICS
 BEST_HISTORY_PATH = ATTENTION_2D_HISTORY
 
