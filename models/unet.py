@@ -23,7 +23,6 @@ class UNet(nn.Module):
     def __init__(self, in_channels=1, out_channels=1):
         super().__init__()
 
-        # Encoder path
         self.enc1 = DoubleConv(in_channels, 32)
         self.pool1 = nn.MaxPool2d(2)
 
@@ -33,10 +32,8 @@ class UNet(nn.Module):
         self.enc3 = DoubleConv(64, 128)
         self.pool3 = nn.MaxPool2d(2)
 
-        # Middle part of the network
         self.bottleneck = DoubleConv(128, 256)
 
-        # Decoder path
         self.up3 = nn.ConvTranspose2d(256, 128, kernel_size=2, stride=2)
         self.dec3 = DoubleConv(256, 128)
 
@@ -46,19 +43,15 @@ class UNet(nn.Module):
         self.up1 = nn.ConvTranspose2d(64, 32, kernel_size=2, stride=2)
         self.dec1 = DoubleConv(64, 32)
 
-        # Final 1x1 convolution produces one prediction score per pixel
         self.final = nn.Conv2d(32, out_channels, kernel_size=1)
 
     def forward(self, x):
-        # Encoder
         e1 = self.enc1(x)
         e2 = self.enc2(self.pool1(e1))
         e3 = self.enc3(self.pool2(e2))
 
-        # Bottleneck
         b = self.bottleneck(self.pool3(e3))
 
-        # Decoder with skip connections
         d3 = self.up3(b)
         d3 = torch.cat([d3, e3], dim=1)
         d3 = self.dec3(d3)
