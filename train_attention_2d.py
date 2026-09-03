@@ -447,7 +447,6 @@ def main():
             print("Early stopping.")
             break
 
-    # Save history
     history_path = os.path.join(
         run_dir,
         "history.csv"
@@ -467,7 +466,6 @@ def main():
         writer.writeheader()
         writer.writerows(history)
 
-    # Reload best model
     model.load_state_dict(
         torch.load(
             run_best_path,
@@ -521,7 +519,6 @@ def main():
             indent=4
         )
 
-    # Copy into best_model
     import shutil
 
     shutil.copy2(
