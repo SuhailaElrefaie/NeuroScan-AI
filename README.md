@@ -1,5 +1,7 @@
 # NeuroScan AI
 
+<img width="1646" height="1164" alt="image" src="https://github.com/user-attachments/assets/4c126e78-a491-4059-b516-94598ad29d59" />
+
 **AI-assisted brain tumour MRI segmentation using 2D and 3D deep learning**
 
 NeuroScan AI is an Individual Software Project developed at Charles University under the supervision of **Kassem Anis**. The project focuses on automatic brain-tumour segmentation from MRI scans using PyTorch.
