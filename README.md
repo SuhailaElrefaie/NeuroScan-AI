@@ -1,6 +1,6 @@
 # NeuroScan AI
 
-<img width="1646" height="1164" alt="image" src="https://github.com/user-attachments/assets/4c126e78-a491-4059-b516-94598ad29d59" />
+<img width="1390" height="1006" alt="image" src="https://github.com/user-attachments/assets/915959b1-b7ae-491d-9b08-1b44e2c1df79" />
 
 **AI-assisted brain tumour MRI segmentation using 2D and 3D deep learning**
 
